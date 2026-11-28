@@ -64,7 +64,9 @@ hand-written SDK types are compared against the schemas and will fail CI by fiel
 route also needs a method in each of the five SDKs and a row in `docs/18-sdk-design.md`, or an
 entry in the unexposed list of `sdk/README.md`, which `npm run check:sdk-routes`,
 `check:sdk-coverage`, `check:sdk-events` and `check:sdk-docs` verify, as CI's lint job does
-with `npm run check:versions`.
+with `npm run check:versions`. A new query parameter must be sent by every SDK, by at least one
+of its calls to the route, or listed in `scripts/sdk-query-parameter-gaps.json`;
+`check:sdk-coverage` checks that too.
 
 - Add or update tests for behavior changes. Backend specs are colocated as `*.spec.ts`
   and run under Jest; dashboard tests are colocated as `*.test.ts` and run under

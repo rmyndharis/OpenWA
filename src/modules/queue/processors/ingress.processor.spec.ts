@@ -1,7 +1,10 @@
 import { DelayedError, Job, Worker } from 'bullmq';
 import { EventEmitter } from 'node:events';
+import { DataSource } from 'typeorm';
 import { MAX_WORKER_CLOSE_WAIT_MS } from './close-worker';
 import { BUSY_KEY_REQUEUE_DELAY_MS, IngressProcessor } from './ingress.processor';
+import { IntegrationDeliveryFailure } from '../../integration/entities/integration-delivery-failure.entity';
+import { PluginInstance } from '../../integration/entities/plugin-instance.entity';
 
 function job(overrides = {}) {
   return {
@@ -66,6 +69,7 @@ describe('IngressProcessor', () => {
     await expect(proc.process(job({ attemptsMade: 2, opts: { attempts: 3 } }))).rejects.toThrow('boom');
     expect(failures.save).toHaveBeenCalledWith(
       expect.objectContaining({ direction: 'inbound', deliveryId: 'd1', pluginId: 'chatwoot' }),
+      { transaction: false },
     );
     expect(hooks.execute).toHaveBeenCalledWith('ingress:error', expect.anything(), expect.anything());
   });
@@ -556,22 +560,25 @@ describe('IngressProcessor stall exhaustion (worker failed event)', () => {
     const { proc, failures, hooks } = setup();
     await proc.onWorkerFailed(stalledJob({ attemptsMade: 1 }), STALLED);
     expect(failures.save).toHaveBeenCalledTimes(1);
-    expect(failures.save).toHaveBeenCalledWith({
-      direction: 'inbound',
-      pluginId: 'chatwoot',
-      instanceId: 'acct1',
-      sessionId: null,
-      deliveryId: 'd1',
-      attempts: 1,
-      lastError: 'job stalled more than allowable limit',
-      payload: {
-        route: 'chatwoot',
-        method: undefined,
-        providerConversationId: undefined,
-        ingress: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+    expect(failures.save).toHaveBeenCalledWith(
+      {
+        direction: 'inbound',
+        pluginId: 'chatwoot',
+        instanceId: 'acct1',
+        sessionId: null,
+        deliveryId: 'd1',
+        attempts: 1,
+        lastError: 'job stalled more than allowable limit',
+        payload: {
+          route: 'chatwoot',
+          method: undefined,
+          providerConversationId: undefined,
+          ingress: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+        },
+        redriven: false,
       },
-      redriven: false,
-    });
+      { transaction: false },
+    );
     expect(hooks.execute).toHaveBeenCalledWith(
       'ingress:error',
       expect.objectContaining({ deliveryId: 'd1', error: 'job stalled more than allowable limit' }),
@@ -1061,5 +1068,60 @@ describe('IngressProcessor busy-key deferral (head-of-line slot isolation)', () 
     await Promise.all([proc.process(mkJob('c1-1', 'c1') as never), proc.process(mkJob('c1-2', 'c1') as never)]);
 
     expect(finished.indexOf('c1-1')).toBeLessThan(started.indexOf('c1-2'));
+  });
+});
+
+// SQLite serves every caller on one connection: a write another request makes while an implicit save
+// transaction is open becomes part of it, and the rollback of a failed insert would discard it too.
+describe('IngressProcessor dead letter beside other writes on one SQLite connection', () => {
+  it('does not roll back a concurrent write when writing the dead letter fails', async () => {
+    const ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [IntegrationDeliveryFailure, PluginInstance],
+      synchronize: true,
+    }).initialize();
+    try {
+      const instances = ds.getRepository(PluginInstance);
+      await instances.save({
+        id: 'chatwoot:acct1',
+        pluginId: 'chatwoot',
+        instanceId: 'acct1',
+        secret: 's',
+        enabled: true,
+      });
+      let beside = Promise.resolve();
+      ds.subscribers.push({
+        listenTo: () => IntegrationDeliveryFailure,
+        beforeInsert: () => {
+          beside = (async () => {
+            await instances.update('chatwoot:acct1', { enabled: false });
+          })();
+          throw new Error('abort dead letter');
+        },
+      });
+      const queue = {
+        waitUntilReady: jest.fn().mockResolvedValue(undefined),
+        add: jest.fn().mockResolvedValue(undefined),
+        remove: jest.fn().mockResolvedValue(0),
+      };
+      const proc = new IngressProcessor(
+        {} as never,
+        ds.getRepository(IntegrationDeliveryFailure),
+        { execute: jest.fn().mockResolvedValue({ continue: true }) } as never,
+        queue as never,
+        {} as never,
+      );
+      const stalled = 'job stalled more than allowable limit';
+
+      await proc.onWorkerFailed(job({ deferredFailure: stalled, attemptsMade: 1 }), new Error(stalled));
+      await beside;
+
+      // The refused dead letter sent the delivery back to the queue, and the other write stayed.
+      expect(queue.add).toHaveBeenCalledTimes(1);
+      expect((await instances.findOneByOrFail({ id: 'chatwoot:acct1' })).enabled).toBe(false);
+    } finally {
+      await ds.destroy();
+    }
   });
 });

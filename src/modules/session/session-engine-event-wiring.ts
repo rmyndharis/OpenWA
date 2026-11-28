@@ -274,8 +274,19 @@ export class SessionEngineEventWiring {
         };
 
         if (host.hasOwnership?.()) {
+          const persistFailed = (err: unknown): void =>
+            this.logger.warn('Failed to persist an engine status', {
+              sessionId: id,
+              status: SessionStatus.QR_READY,
+              error: err instanceof Error ? err.message : String(err),
+            });
           void host
             .updateStatus(id, SessionStatus.QR_READY)
+            // A write that fails says nothing about the owner: it is logged, and the gate below still decides.
+            .catch((err: unknown) => {
+              persistFailed(err);
+              return undefined;
+            })
             .then(updated => {
               if (updated === false || !host.isLiveEngine(id, engine) || !host.ownsSession(id)) {
                 this.logger.warn('Skipped QR notifications after fenced QR status write matched no owned row', {
@@ -286,13 +297,7 @@ export class SessionEngineEventWiring {
               }
               emitQrEffects();
             })
-            .catch(err =>
-              this.logger.warn('Failed to persist an engine status', {
-                sessionId: id,
-                status: SessionStatus.QR_READY,
-                error: err instanceof Error ? err.message : String(err),
-              }),
-            );
+            .catch(persistFailed);
           return;
         }
 
@@ -373,6 +378,23 @@ export class SessionEngineEventWiring {
         });
 
         host.messages.applyMessageEditQueued(id, message);
+      },
+      onInboundUnreadable: (kept): void => {
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
+        host.messages.keepUnreadInbound(id, kept);
+      },
+      isChangeKept: (targetId): boolean => host.messages.isChangeKept(id, targetId),
+      onStoredCopyRefused: (kept): void => {
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
+        host.messages.keepStoredCopy(id, kept);
+      },
+      isStoredCopyKept: (messageId): boolean => host.messages.isStoredCopyKept(id, messageId),
+      onStoredAccountCleared: (): void => host.messages.forgetKeptInbound(id),
+      // Not guarded either: the clear it keeps is of the session's own stores.
+      onStoredAccountWipeRefused: (kept): void => host.messages.keepStoredWipe(id, kept),
+      onStoredChangeRefused: (kept): void => {
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
+        host.messages.keepStoredChange(id, kept);
       },
       onEventResponse: (event): void => {
         if (!host.isLiveEngine(id, engine) || !owns()) return;
@@ -677,20 +699,25 @@ export class SessionEngineEventWiring {
 
           if (host.ownsSession(id)) {
             if (host.hasOwnership?.()) {
+              const persistFailed = (err: unknown): void =>
+                this.logger.warn('Failed to persist an engine status', {
+                  sessionId: id,
+                  status: SessionStatus.FAILED,
+                  error: err instanceof Error ? err.message : String(err),
+                });
               void host
                 .updateStatus(id, SessionStatus.FAILED)
+                // As on the QR path: a write that fails says nothing about the owner, and the gate below decides.
+                .catch((err: unknown) => {
+                  persistFailed(err);
+                  return undefined;
+                })
                 .then(updated => {
                   if (updated !== false && host.ownsSession(id)) {
                     emitErrorHook();
                   }
                 })
-                .catch(err =>
-                  this.logger.warn('Failed to persist an engine status', {
-                    sessionId: id,
-                    status: SessionStatus.FAILED,
-                    error: err instanceof Error ? err.message : String(err),
-                  }),
-                );
+                .catch(persistFailed);
             } else {
               emitErrorHook();
               persistStatus(SessionStatus.FAILED);

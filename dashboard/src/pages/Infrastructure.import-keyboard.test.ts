@@ -51,7 +51,14 @@ function installFetchStub(): void {
       return new Promise(resolve =>
         setImmediate(() =>
           resolve(
-            jsonResponse({ exportedAt: '2026-10-09T10:00:00.000Z', dataDbType: 'sqlite', tables: {}, counts: {} }),
+            jsonResponse({
+              exportedAt: '2026-10-09T10:00:00.000Z',
+              dataDbType: 'sqlite',
+              tables: {},
+              counts: {},
+              skippedTables: [],
+              omittedInlineMedia: { messages: 0, messageBatches: 0 },
+            }),
           ),
         ),
       );

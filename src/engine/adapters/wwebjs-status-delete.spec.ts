@@ -48,66 +48,81 @@ describe('deleteStatus on whatsapp-web.js', () => {
   });
 });
 
-describe('collectStatuses transport error handling', () => {
-  it('breaks out of collectStatuses loops and reports transport death on broadcast/media failure', async () => {
-    const transportErr = new Error('Protocol error (Runtime.callFunctionOn): Session closed.');
+describe('collectStatuses when a page call fails', () => {
+  const transportErr = new Error('Protocol error (Runtime.callFunctionOn): Session closed.');
+
+  function makeCollector(firstMedia: unknown) {
     const reportIfPageTransportError = jest.fn();
-    const secondBroadcastContact = jest.fn();
-    const secondMsgMedia = jest.fn();
+    const secondMsgMedia = jest.fn().mockResolvedValue(undefined);
     const host = {
       ensureReady: jest.fn(),
       getClient: () => ({}) as unknown as Client,
       isPageTransportError: (error: unknown) => error === transportErr,
       reportIfPageTransportError,
-      capInboundMediaFor: jest.fn().mockRejectedValueOnce(transportErr).mockImplementation(secondMsgMedia),
+      capInboundMediaFor: jest.fn().mockRejectedValueOnce(firstMedia).mockImplementation(secondMsgMedia),
       logger: createLogger('wwebjs-status-collect.spec'),
     } as unknown as WwebjsEngineHost;
     const status = new WwebjsStatus(host) as unknown as {
-      collectStatuses(broadcasts: unknown[]): Promise<unknown[]>;
+      collectStatuses(broadcasts: unknown[]): Promise<Array<{ id: string; media?: unknown }>>;
     };
+    return { status, reportIfPageTransportError, secondMsgMedia };
+  }
 
-    const collected = await status.collectStatuses([
-      {
-        msgs: [
-          {
-            id: { _serialized: 'false_status@broadcast_1' },
-            type: 'image',
-            hasMedia: true,
-            timestamp: 1_700_000_000,
-          },
-          {
-            id: { _serialized: 'false_status@broadcast_2' },
-            type: 'image',
-            hasMedia: true,
-            timestamp: 1_700_000_001,
-          },
-        ],
-        getContact: jest.fn().mockResolvedValue({ id: { _serialized: '628111@c.us' } }),
-      },
-      {
-        msgs: [{ id: { _serialized: 'false_status@broadcast_3' }, type: 'chat', timestamp: 1_700_000_002 }],
-        getContact: secondBroadcastContact,
-      },
-    ]);
+  const imageStory = (n: number) => ({
+    id: { _serialized: `false_status@broadcast_${n}` },
+    type: 'image',
+    hasMedia: true,
+    timestamp: 1_700_000_000 + n,
+  });
+  const textStory = (n: number) => ({
+    id: { _serialized: `false_status@broadcast_${n}` },
+    type: 'chat',
+    timestamp: 1_700_000_000 + n,
+  });
+
+  const poster = (n: number) => jest.fn().mockResolvedValue({ id: { _serialized: `62811${n}@c.us` } });
+
+  it('answers a page that dies downloading a story with the 503, not the stories read before it', async () => {
+    const { status, reportIfPageTransportError, secondMsgMedia } = makeCollector(transportErr);
+    const laterContact = jest.fn();
+
+    await expect(
+      status.collectStatuses([
+        { msgs: [textStory(1)], getContact: poster(1) },
+        { msgs: [imageStory(2), imageStory(3)], getContact: poster(2) },
+        { msgs: [textStory(4)], getContact: laterContact },
+      ]),
+    ).rejects.toThrow(EngineTransportError);
 
     expect(reportIfPageTransportError).toHaveBeenCalledWith(transportErr, 'collectStatuses');
     expect(secondMsgMedia).not.toHaveBeenCalled();
-    expect(secondBroadcastContact).not.toHaveBeenCalled();
-    expect(collected).toEqual([]);
+    expect(laterContact).not.toHaveBeenCalled();
+  });
 
-    reportIfPageTransportError.mockClear();
-    const contactBomb = jest.fn().mockRejectedValue(transportErr);
-    await status.collectStatuses([
-      {
-        msgs: [{ id: { _serialized: 'false_status@broadcast_4' }, type: 'chat', timestamp: 1_700_000_003 }],
-        getContact: contactBomb,
-      },
-      {
-        msgs: [{ id: { _serialized: 'false_status@broadcast_5' }, type: 'chat', timestamp: 1_700_000_004 }],
-        getContact: secondBroadcastContact,
-      },
-    ]);
+  it("answers a page that dies reading a poster's contact with the 503, not the stories read before it", async () => {
+    const { status, reportIfPageTransportError } = makeCollector(undefined);
+    const laterContact = jest.fn();
+
+    await expect(
+      status.collectStatuses([
+        { msgs: [textStory(5)], getContact: poster(5) },
+        { msgs: [textStory(6)], getContact: jest.fn().mockRejectedValue(transportErr) },
+        { msgs: [textStory(7)], getContact: laterContact },
+      ]),
+    ).rejects.toThrow(EngineTransportError);
+
     expect(reportIfPageTransportError).toHaveBeenCalledWith(transportErr, 'collectStatuses');
-    expect(secondBroadcastContact).not.toHaveBeenCalled();
+    expect(laterContact).not.toHaveBeenCalled();
+  });
+
+  it('still lists every story, without the media, when a download fails for another reason', async () => {
+    const { status, reportIfPageTransportError, secondMsgMedia } = makeCollector(new Error('media key expired'));
+
+    const collected = await status.collectStatuses([{ msgs: [imageStory(8), imageStory(9)], getContact: poster(8) }]);
+
+    expect(collected.map(s => s.id)).toEqual(['false_status@broadcast_8', 'false_status@broadcast_9']);
+    expect(collected[0].media).toBeUndefined();
+    expect(secondMsgMedia).toHaveBeenCalled();
+    expect(reportIfPageTransportError).not.toHaveBeenCalled();
   });
 });

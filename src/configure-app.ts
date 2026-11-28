@@ -12,14 +12,16 @@ import {
   resolveInflightBodyBudgetBytes,
 } from './config/inflight-body-budget';
 import { ActiveKeyIndex } from './modules/auth/active-key-index';
+import { refuseUnrestorableImport, refuseUnrestorableImportBody } from './modules/infra/import-body-guard';
 import { requestContextMiddleware } from './common/middleware/request-context.middleware';
 import { requestMetricsBoundaryMiddleware } from './common/middleware/request-metrics.middleware';
 import { createLogger } from './common/services/logger.service';
 import { ShutdownService } from './common/services/shutdown.service';
+import { sharedConnectionHeld } from './common/utils/shared-connection';
 import { injectDashboardCspNonce } from './config/dashboard-csp';
 import { resolveCorsPolicy, isUpgradeInsecureRequestsEnabled, resolveBodyLimit } from './config/bootstrap-security';
 import { resolveRequestTimeoutMs } from './config/http-timeouts';
-import { parseTrustedProxies } from './common/utils/ip';
+import { parseTrustedProxies, resolveClientIp } from './common/utils/ip';
 import {
   BODY_NESTING_MESSAGE,
   exceedsBodyNesting,
@@ -41,7 +43,16 @@ export interface ConfigureAppOptions {
    * copy and the original would pass.
    */
   dashboard?: DashboardSource;
+  /** Defaults to MAX_HELD_BODY_REQUESTS; a suite lowers it so that a handful of connections fill it. */
+  maxHeldBodyRequests?: number;
 }
+
+/**
+ * Requests with a body a data restore holds at once. Each keeps its socket and stream buffer (tens of KiB) until the
+ * restore ends or REQUEST_TIMEOUT_MS cuts it, and is held ahead of authentication and the in-flight budget, so a
+ * client could otherwise open as many as it liked; a blocked event loop accepted no more than the listen backlog.
+ */
+export const MAX_HELD_BODY_REQUESTS = 256;
 
 /** The request-body caps this applied, so the caller can log them. */
 export interface AppliedBodyCaps {
@@ -52,7 +63,8 @@ export interface AppliedBodyCaps {
 /**
  * Everything the production HTTP surface installs on the Express app: the request metrics boundary,
  * request context, the CSP nonce, helmet, the SPA document handler, CORS, the encoded-NUL refusal, the
- * in-flight body budget, the body parsers, the nesting-depth refusal and the trailing-slash DELETE refusal.
+ * teardown refusal, the hold on request bodies during a restore, the in-flight body budget, the body parsers, the
+ * nesting-depth refusal and the trailing-slash DELETE refusal.
  *
  * It lives here rather than inside bootstrap() so the e2e lane can run the SAME stack. main.ts
  * boots on import, so a suite cannot import it; the whole stack was therefore executed by nothing,
@@ -249,7 +261,7 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
   // event-stream client is admitted until that close. The health probes stay answered so
   // readiness keeps reporting its draining state. Ahead of the budget, so no body is read.
   const shutdown = optional(ShutdownService);
-  app.use((req: Request, res: Response, next: NextFunction) => {
+  const refuseDuringTeardown = (req: Request, res: Response, next: NextFunction): void => {
     if (!shutdown?.isTearingDown()) return next();
     const path = req.path.toLowerCase();
     if (path === '/api/health' || path.startsWith('/api/health/')) return next();
@@ -257,6 +269,42 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
       statusCode: 503,
       message: 'Server is shutting down',
       error: 'Service Unavailable',
+    });
+  };
+  app.use(refuseDuringTeardown);
+
+  // While a SQLite restore holds the data connection, a request with a body waits here with its body unread, so
+  // Node reads no more of it than its stream buffer, as it did while a restore held the event loop. Parked after
+  // the in-flight budget, an unread body would be cut as stalled and would hold its reservation. A client that left
+  // meanwhile is not passed on: its body is gone, and the budget would never release what it charged for it. One
+  // let through once teardown has begun is refused like any other. Past MAX_HELD_BODY_REQUESTS a request is refused
+  // as the budget refuses one, its body never read; a request let through or abandoned gives its place back.
+  const maxHeldBodyRequests = options.maxHeldBodyRequests ?? MAX_HELD_BODY_REQUESTS;
+  let heldBodyRequests = 0;
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const bodyIndicated =
+      req.headers['transfer-encoding'] !== undefined || !Number.isNaN(Number(req.headers['content-length']));
+    const released = bodyIndicated ? sharedConnectionHeld() : undefined;
+    if (!released) return next();
+    if (heldBodyRequests >= maxHeldBodyRequests) {
+      res.status(503).set('Retry-After', '5').set('Connection', 'close').json({
+        statusCode: 503,
+        message: 'Too many requests are waiting for a data restore to end; retry later',
+        error: 'Service Unavailable',
+      });
+      return;
+    }
+    heldBodyRequests++;
+    let holding = true;
+    const giveBack = (): void => {
+      if (holding) heldBodyRequests--;
+      holding = false;
+    };
+    req.once('close', giveBack);
+    void released.then(() => {
+      giveBack();
+      if (req.destroyed || req.socket.destroyed) return;
+      refuseDuringTeardown(req, res, next);
     });
   });
 
@@ -285,6 +333,21 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
       requestTimeoutMs: resolveRequestTimeoutMs(process.env.REQUEST_TIMEOUT_MS),
     }).middleware,
   );
+  // The budget above bounds the bytes held, not what parsing them costs. The one body that runs to
+  // hundreds of megabytes is a restore, with the cap raised for it, and it is refused here when the
+  // heap cannot take its parse.
+  const trustedProxies = parseTrustedProxies(process.env.TRUSTED_PROXIES);
+  // Only a restore above the default cap is judged here, so the keys are read again for it: the index is
+  // otherwise up to 30 s behind a key made, demoted or scoped on another node, or still empty after a failed
+  // load at boot.
+  app.use(
+    refuseUnrestorableImport(parseBodyLimitBytes(bodyLimit), req => {
+      if (!keyIndex) return false;
+      return keyIndex
+        .refresh()
+        .then(() => keyIndex.isUnscopedAdmin(req.headers, resolveClientIp(req, trustedProxies), req.path));
+    }),
+  );
   // The `verify` callback stashes the EXACT bytes json() received on req.rawBody, byte-identical to
   // what a provider signed, so the @Public ingress controller can HMAC-verify over the raw body
   // (JSON.stringify(req.body) is NOT byte-identical). Cheap for every route; non-ingress routes ignore it.
@@ -301,12 +364,15 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
   // stack trace in the log. A body is refused here for the price of one pass over its bytes, ahead of the
   // parse, authentication, and every guard, interceptor and pipe. body-parser reports an error thrown from
   // `verify` as 403 unless it carries a status; this one carries 400, and Nest answers it in the usual shape.
+  // A restore is weighed here a second time, now that its bytes show whether it decodes to a string of one
+  // or of two bytes a character, and refused with 413 before it is decoded.
   app.use(
     json({
       limit: bodyLimit,
       inflate: false,
       verify: (req: Request & { rawBody?: Buffer; nestingScanned?: boolean }, _res, buf, encoding) => {
         req.rawBody = buf;
+        refuseUnrestorableImportBody(req, buf);
         if (isUtf8Charset(encoding)) {
           if (exceedsJsonNesting(buf)) throw new BadRequestException(BODY_NESTING_MESSAGE);
           req.nestingScanned = true;
@@ -323,6 +389,7 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
       // as json(); other content types remain unsupported rather than installing a global catch-all.
       verify: (req: Request & { rawBody?: Buffer }, _res, buf) => {
         req.rawBody = buf;
+        refuseUnrestorableImportBody(req, buf);
       },
     }),
   );

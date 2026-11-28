@@ -13,6 +13,7 @@ import { QUEUE_NAMES } from '../../modules/queue/queue-names';
 import { QUEUE_CLOSE_TIMEOUT_MS } from '../../modules/queue/shutdown-safe-queue';
 import { ENGINE_TEARDOWN_TIMEOUT_MS } from '../../modules/session/session-lifecycle-fences';
 import { AUTOSTART_SHUTDOWN_WAIT_MS } from '../../modules/session/session.service';
+import { PARKED_CHANGES_SHUTDOWN_PASS_MS } from '../../modules/session/message-projector.service';
 import { BULK_SHUTDOWN_DRAIN_MS } from '../../modules/message/bulk-message.service';
 import {
   DEFAULT_SHUTDOWN_DELAY_MS,
@@ -39,6 +40,7 @@ describe('shutdown time budget', () => {
     DEFAULT_SHUTDOWN_DELAY_MS +
     INGRESS_SHUTDOWN_WAIT_MS +
     ENGINE_TEARDOWN_TIMEOUT_MS +
+    PARKED_CHANGES_SHUTDOWN_PASS_MS +
     AUTOSTART_SHUTDOWN_WAIT_MS +
     BULK_SHUTDOWN_DRAIN_MS +
     SHUTDOWN_MAINTENANCE_WAIT_MS * 4 +
@@ -56,7 +58,7 @@ describe('shutdown time budget', () => {
     WS_REDIS_QUIT_TIMEOUT_MS;
 
   it('sums to the documented totals', () => {
-    expect([base, withPlugins, clustered]).toEqual([43_000, 53_000, 75_000]);
+    expect([base, withPlugins, clustered]).toEqual([44_000, 54_000, 76_000]);
     expect(WEBHOOK_PRUNE_SHUTDOWN_WAIT_MS).toBeLessThanOrEqual(DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS);
   });
 

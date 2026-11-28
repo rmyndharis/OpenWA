@@ -389,6 +389,7 @@
     "connecting": "연결하는 중...",
     "invalidKey": "잘못된 API 키입니다",
     "connectionError": "서버에 연결할 수 없습니다. 다시 시도해 주세요.",
+    "sessionNotKept": "키는 확인되었지만 이 브라우저가 세션 쿠키를 저장하지 않았습니다. 대시보드와 API는 같은 사이트에 있거나 같은 출처(origin)에서 제공되어야 합니다.",
     "help": "도움이 필요하신가요?",
     "viewDocs": "문서 보기",
     "footer": "Yudhi Armyndharis와 OpenWA 커뮤니티가 ❤️로 만들었습니다",
@@ -1280,11 +1281,13 @@
       "exportFailed": "데이터를 내보내지 못했습니다",
       "exportPartialTitle": "백업에 일부 미디어가 누락되었습니다",
       "exportPartial": "첨부 파일 {{count}}개가 내보내기 미디어 한도를 초과하여 플레이스홀더로 저장되었습니다. 메시지는 복원되지만 해당 미디어는 복원되지 않습니다.",
+      "exportIncomplete": "백업이 완료되기 전에 다운로드가 끝나 아무것도 저장되지 않았습니다. 다시 시도하세요.",
       "importFailed": "데이터를 가져오지 못했습니다",
       "importOk": "데이터를 가져왔습니다",
       "importConfirm": "가져오기를 실행하면 현재 데이터가 백업본({{rows}}행)으로 완전히 대체됩니다. 되돌릴 수 없습니다. 계속할까요?",
       "invalidFile": "올바른 OpenWA 데이터 백업 파일이 아닙니다.",
-      "importTooLarge": "백업 파일이 요청 크기 제한을 초과합니다. 서버의 BODY_SIZE_LIMIT을 늘린 후 다시 시도하세요."
+      "importTooLarge": "백업 파일이 요청 크기 제한을 초과합니다. 서버의 BODY_SIZE_LIMIT을 늘린 후 다시 시도하세요.",
+      "importStopped": "가져오기 중에 서버가 중지되어 가져오기가 취소되었으므로 데이터는 변경되지 않았습니다. 서버가 다시 실행되면 같은 파일을 다시 가져오세요."
     },
     "restart": {
       "idleTitle": "설정이 저장되었습니다",

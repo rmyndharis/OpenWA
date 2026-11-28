@@ -36,8 +36,14 @@ import {
   SessionStoppedException,
 } from './session-engine-controls';
 import { decideReconnect, STABLE_READY_MS } from './reconnect-policy';
+import { LIVE_WRITE_WAIT_MS } from './session-row-park';
 import { ACK_RECONCILE_DELAY_MS } from './message-projector.service';
-import { SessionEngineLifecycle, type ReconnectState } from './session-engine-lifecycle.service';
+import {
+  QR_AUDIT_READERS_PER_CODE,
+  SessionEngineLifecycle,
+  type ReconnectState,
+} from './session-engine-lifecycle.service';
+import { getRequestActor, runWithRequestId, setRequestActor } from '../../common/services/request-context';
 import {
   ACCOUNT_REJECTED_REASON,
   AUTH_FAILURE_REASON,
@@ -77,6 +83,8 @@ import { MessageProjector } from './message-projector.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
+import { RecoveryQueue, recoveryQueueOptions } from '../../common/utils/recovery-queue';
+import { KeptChatPurge, journalChatPurge, restoredChatPurge, type ChatPurgeSteps } from './chat-purge-record';
 import { HookManager } from '../../core/hooks';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { captureSessionWrites } from '../../common/utils/session-write-scope';
@@ -157,6 +165,7 @@ describe('SessionService', () => {
   let engineFactory: jest.Mocked<Partial<EngineFactory>>;
   let eventsGateway: jest.Mocked<Partial<EventsGateway>>;
   let webhookService: jest.Mocked<Partial<WebhookService>>;
+  let recovery: RecoveryQueue;
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let configService: jest.Mocked<Partial<ConfigService>>;
   let lidMappingStore: jest.Mocked<Partial<LidMappingStoreService>>;
@@ -294,8 +303,11 @@ describe('SessionService', () => {
       emitQRCode: jest.fn(),
     };
 
+    recovery = new RecoveryQueue(recoveryQueueOptions(false, 0));
     webhookService = {
       dispatch: jest.fn().mockResolvedValue(undefined),
+      // The queue a database that cannot answer leaves its work in, shared as the app shares it.
+      recoveryQueue: jest.fn(() => recovery),
     };
 
     auditService = { logWarn: jest.fn().mockResolvedValue(null), logInfo: jest.fn().mockResolvedValue(null) };
@@ -1356,6 +1368,21 @@ describe('SessionService', () => {
       mockEngine.initialize.mockRejectedValue(new QueryFailedError('SELECT nope', [], driverError));
 
       await expect(service.start('sess-uuid-1')).rejects.toBeInstanceOf(QueryFailedError);
+      expect(mockEngine.initialize).toHaveBeenCalledTimes(1);
+    });
+
+    // A database host that does not resolve is transient once the data connection marks its error; an engine's is not.
+    it("does NOT retry an engine's DNS failure, whose code a database host can raise too", async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (engineFactory.create as jest.Mock).mockClear().mockReturnValue(mockEngine);
+      const dns = Object.assign(new Error('getaddrinfo ENOTFOUND web.whatsapp.com'), {
+        code: 'ENOTFOUND',
+        syscall: 'getaddrinfo',
+      });
+      mockEngine.initialize.mockRejectedValue(dns);
+
+      await expect(service.start('sess-uuid-1')).rejects.toBe(dns);
       expect(mockEngine.initialize).toHaveBeenCalledTimes(1);
     });
 
@@ -3727,7 +3754,10 @@ describe('SessionService', () => {
         await jest.advanceTimersByTimeAsync(60_000);
         expect(storedStatus).toBe(SessionStatus.DISCONNECTED);
         (engineFactory.create as jest.Mock).mockReturnValueOnce(replacement);
-        await service.start('sess-uuid-1', { explicit: true });
+        // The replacement's status writes go out once the old one has held them up for the limit.
+        const started = service.start('sess-uuid-1', { explicit: true });
+        await jest.advanceTimersByTimeAsync(LIVE_WRITE_WAIT_MS);
+        await started;
         expect(storedStatus).toBe(SessionStatus.READY);
         finishStatus();
         const error = await pending;
@@ -7385,7 +7415,9 @@ describe('SessionService', () => {
       type Row = { metadata?: Record<string, unknown> };
       const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
       let stored: Row = { metadata: {} };
-      (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
+      (messageRepository.findOne as jest.Mock).mockImplementation(() =>
+        Promise.resolve({ chatId: 'c', ...clone(stored) }),
+      );
       (messageRepository.update as jest.Mock).mockImplementation((_c: unknown, patch: Row) => {
         stored = clone({ ...stored, ...patch });
         return Promise.resolve({ affected: 1 });
@@ -7419,7 +7451,7 @@ describe('SessionService', () => {
       // The row was already advanced to DELIVERED by a concurrent ack. A full-row save(msg) would
       // re-persist the stale status read at findOne time and clobber it; the write must be scoped to
       // the metadata column only, keyed by (sessionId, waMessageId).
-      (messageRepository.findOne as jest.Mock).mockResolvedValue({ status: 'delivered', metadata: {} });
+      (messageRepository.findOne as jest.Mock).mockResolvedValue({ chatId: 'c', status: 'delivered', metadata: {} });
       (messageRepository.save as jest.Mock).mockClear();
       (messageRepository.update as jest.Mock).mockClear().mockResolvedValue({ affected: 1 });
 
@@ -7438,7 +7470,9 @@ describe('SessionService', () => {
       type Row = { metadata?: Record<string, unknown> };
       const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
       let stored: Row = { metadata: { reactions: { alice: '👍', bob: '🎉' } } };
-      (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
+      (messageRepository.findOne as jest.Mock).mockImplementation(() =>
+        Promise.resolve({ chatId: 'c', ...clone(stored) }),
+      );
       (messageRepository.update as jest.Mock).mockImplementation((_c: unknown, patch: Row) => {
         stored = clone({ ...stored, ...patch });
         return Promise.resolve({ affected: 1 });
@@ -7456,7 +7490,9 @@ describe('SessionService', () => {
       type Row = { metadata?: Record<string, unknown> };
       const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
       let stored: Row = { metadata: {} };
-      (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
+      (messageRepository.findOne as jest.Mock).mockImplementation(() =>
+        Promise.resolve({ chatId: 'c', ...clone(stored) }),
+      );
       (messageRepository.update as jest.Mock)
         .mockRejectedValueOnce(new Error('write blip')) // alice's write fails
         .mockImplementation((_c: unknown, patch: Row) => {
@@ -7474,7 +7510,7 @@ describe('SessionService', () => {
 
     it('cleans up the per-message serialization entry after the chain drains (no leak)', async () => {
       const callbacks = await startAndCaptureCallbacks();
-      (messageRepository.findOne as jest.Mock).mockResolvedValue({ metadata: {} });
+      (messageRepository.findOne as jest.Mock).mockResolvedValue({ chatId: 'c', metadata: {} });
       (messageRepository.update as jest.Mock).mockResolvedValue({ affected: 1 });
 
       callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice', reaction: '👍' });
@@ -7493,7 +7529,9 @@ describe('SessionService', () => {
       type Row = { metadata?: Record<string, unknown> };
       const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
       let stored: Row = { metadata: {} };
-      (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
+      (messageRepository.findOne as jest.Mock).mockImplementation(() =>
+        Promise.resolve({ chatId: 'c', ...clone(stored) }),
+      );
       (messageRepository.update as jest.Mock).mockImplementation((_c: unknown, patch: Row) => {
         stored = clone({ ...stored, ...patch });
         return Promise.resolve({ affected: 1 });
@@ -8860,6 +8898,144 @@ describe('SessionService', () => {
 
       await expect(service.getQRCode('sess-uuid-1')).rejects.toThrow('already authenticated');
     });
+
+    describe('SESSION_QR_GENERATED audit rows', () => {
+      let callbacks: EngineEventCallbacks;
+      let controller: SessionController;
+      // The reader each row is written for: the key and address the request context holds when it is written.
+      let rows: Array<{ apiKeyId?: string; ipAddress?: string }>;
+      // QR rows still to fail: AuditService.log answers null when its insert fails.
+      let failingRows: number;
+      const read = () => controller.getQRCode('sess-uuid-1');
+      const readAs = (apiKeyId: string, ipAddress: string) =>
+        runWithRequestId(`req-${apiKeyId}-${ipAddress}`, () => {
+          setRequestActor({ apiKeyId, ipAddress });
+          return read();
+        });
+
+      beforeEach(async () => {
+        rows = [];
+        failingRows = 0;
+        auditService.logInfo.mockImplementation((action: AuditAction) => {
+          if (action !== AuditAction.SESSION_QR_GENERATED) return Promise.resolve(null);
+          if (failingRows > 0) {
+            failingRows--;
+            return Promise.resolve(null);
+          }
+          const { apiKeyId, ipAddress } = getRequestActor() ?? {};
+          rows.push({ apiKeyId, ipAddress });
+          return Promise.resolve({ action, apiKeyId, ipAddress });
+        });
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ status: SessionStatus.QR_READY }));
+        (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+        mockEngine.initialize.mockImplementation((cb: EngineEventCallbacks) => {
+          callbacks = cb;
+          return Promise.resolve();
+        });
+        await service.start('sess-uuid-1');
+        controller = new SessionController(service, auditService as unknown as AuditService, new ChatScopeService());
+      });
+
+      const A = { apiKeyId: 'key-a', ipAddress: '10.0.0.1' };
+      const B = { apiKeyId: 'key-b', ipAddress: '10.0.0.1' };
+      const A_ELSEWHERE = { apiKeyId: 'key-a', ipAddress: '2001:db8::7' };
+      const readBy = (reader: { apiKeyId: string; ipAddress: string }) => readAs(reader.apiKeyId, reader.ipAddress);
+
+      // The dashboard polls GET /qr every few seconds while its pairing dialog is open, so a row per read
+      // filled the audit log with copies of one code. One reader gets a row for each code it is handed.
+      it('are written once per code for a reader polling it', async () => {
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        await readBy(A);
+        await readBy(A);
+        await readBy(A);
+        mockEngine.getQRCode.mockReturnValue('qr-second');
+        await readBy(A);
+        await readBy(A);
+
+        expect(rows).toEqual([A, A]);
+      });
+
+      // Whoever reads a pairing code can link a phone to the session, so every reader of a code is named.
+      it('are written for a second key reading the same code', async () => {
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        await readBy(A);
+        await readBy(B);
+        await readBy(A);
+        await readBy(B);
+
+        expect(rows).toEqual([A, B]);
+      });
+
+      it('are written for the same key reading the same code from a second address', async () => {
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        await readBy(A);
+        await readBy(A_ELSEWHERE);
+        await readBy(A);
+        await readBy(A_ELSEWHERE);
+
+        expect(rows).toEqual([A, A_ELSEWHERE]);
+      });
+
+      it('are written again for every reader of a new code', async () => {
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        await readBy(A);
+        await readBy(B);
+        mockEngine.getQRCode.mockReturnValue('qr-second');
+        await readBy(B);
+        await readBy(A);
+        await readBy(B);
+
+        expect(rows).toEqual([A, B, B, A]);
+      });
+
+      it('are written on the next read when the row for a reader could not be written', async () => {
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        failingRows = 1;
+        await readBy(A);
+        await readBy(A);
+        await readBy(A);
+
+        expect(failingRows).toBe(0);
+        expect(rows).toEqual([A]);
+      });
+
+      it('are written on every read by a reader past the ones remembered for a code', async () => {
+        const readers = Array.from({ length: QR_AUDIT_READERS_PER_CODE }, (_unused, i) => ({
+          apiKeyId: `key-${i}`,
+          ipAddress: '10.0.0.1',
+        }));
+        const extra = { apiKeyId: 'key-extra', ipAddress: '10.0.0.1' };
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        for (const reader of readers) await readBy(reader);
+        for (const reader of readers) await readBy(reader);
+        await readBy(extra);
+        await readBy(extra);
+
+        expect(rows).toEqual([...readers, extra, extra]);
+      });
+
+      it.each([
+        ['authenticates', () => callbacks.onReady?.('628123', 'Tester')],
+        ['stops', async () => void (await service.stop('sess-uuid-1'))],
+        ['is deleted', () => service.delete('sess-uuid-1')],
+      ])('forget the code last recorded once the session %s', async (_event, end) => {
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        await read();
+        await end();
+        if (!lifecycle.isEngineActive('sess-uuid-1')) await service.start('sess-uuid-1');
+
+        await read();
+
+        expect(rows).toHaveLength(2);
+      });
+
+      it('keep nothing for a read that finishes after its engine retired', async () => {
+        await service.stop('sess-uuid-1');
+
+        expect(service.claimQrAudit('sess-uuid-1', 'qr-late', 'reader')).toBe(true);
+        expect(service.claimQrAudit('sess-uuid-1', 'qr-late', 'reader')).toBe(true);
+      });
+    });
   });
 
   // ── getStats ──────────────────────────────────────────────────────
@@ -9585,6 +9761,33 @@ describe('SessionService', () => {
 
         expect((await messages.find()).map(row => row.waMessageId)).toEqual(['after']);
       });
+
+      it('runs a removal kept while the database was away up to the clear, sparing a message stored since', async () => {
+        await messages.clear();
+        const seed = async (waMessageId: string, createdAt: string): Promise<void> => {
+          await messages.insert({ sessionId: 'sess-uuid-1', chatId: '123@c.us', from: 'a', to: 'b', waMessageId });
+          await messages.update({ waMessageId }, { createdAt: () => `'${createdAt}'` });
+        };
+        await seed('before', '2026-09-29 13:39:00');
+        Object.assign(service as unknown as Record<string, unknown>, { messageRepository: messages });
+        jest.useFakeTimers({
+          now: Date.parse('2026-09-29T13:39:01.500Z'),
+          doNotFake: ['nextTick', 'queueMicrotask', 'setImmediate', 'clearImmediate', 'setTimeout', 'clearTimeout'],
+        });
+        jest
+          .spyOn(messages, 'find')
+          .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
+        await expect(service.clearChatMessages('sess-uuid-1', '123@c.us')).resolves.toBe(true);
+        expect(recovery.get('purge', 'sess-uuid-1:purge:123@c.us')).toBeDefined();
+
+        // The database answers a while later, after another message of the chat was stored.
+        await seed('later', '2026-09-29 13:40:00');
+        jest.setSystemTime(Date.parse('2026-09-29T13:41:00.000Z'));
+        await recovery.flush();
+
+        expect(recovery.get('purge', 'sess-uuid-1:purge:123@c.us')).toBeUndefined();
+        expect((await messages.find()).map(row => row.waMessageId)).toEqual(['later']);
+      });
     });
 
     it('removes in batches until a short one', async () => {
@@ -9638,6 +9841,47 @@ describe('SessionService', () => {
         expect(deletedHooks()).toHaveLength(0);
       },
     );
+
+    it('a removal the database could not take is kept and runs once it answers, the call succeeding', async () => {
+      (messageRepository.find as jest.Mock)
+        .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }))
+        .mockResolvedValue([]);
+
+      await expect(service.clearChatMessages('sess-uuid-1', '123@c.us')).resolves.toBe(true);
+      expect(recovery.get('purge', 'sess-uuid-1:purge:123@c.us')).toBeDefined();
+      await recovery.flush();
+
+      expect(messageRepository.find).toHaveBeenCalledTimes(2);
+      expect(recovery.get('purge', 'sess-uuid-1:purge:123@c.us')).toBeUndefined();
+    });
+
+    it('a kept removal that keeps failing for a reason of its own is given up with a loss logged', async () => {
+      (messageRepository.find as jest.Mock)
+        .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }))
+        .mockRejectedValue(new Error('no such column'));
+      const logError = jest.spyOn((service as unknown as { logger: { error: jest.Mock } }).logger, 'error');
+      await service.clearChatMessages('sess-uuid-1', '123@c.us');
+
+      for (let i = 0; i < 3; i++) await recovery.flush();
+
+      expect(logError).toHaveBeenCalledWith(
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ action: 'chat_purge_lost', reason: 'failures', chatId: '123@c.us' }),
+      );
+    });
+
+    it('a kept removal survives a restart in the journal, its cutoff with it', () => {
+      const record = new KeptChatPurge('k', 'sess-uuid-1', '123@c.us', 1_700_000_000_000, 5, {} as ChatPurgeSteps);
+
+      expect(restoredChatPurge(JSON.parse(JSON.stringify(journalChatPurge(record))))).toEqual({
+        sessionId: 'sess-uuid-1',
+        chatId: '123@c.us',
+        cutoff: 1_700_000_000_000,
+        since: 5,
+      });
+      expect(record.ageCapped()).toBe(false);
+    });
 
     it('a failed removal after the engine succeeded is logged and the call still succeeds', async () => {
       (messageRepository.find as jest.Mock).mockRejectedValueOnce(new Error('db down'));
@@ -10075,10 +10319,17 @@ describe('SessionService', () => {
       onMessageEdited(edited());
       await new Promise(resolve => setImmediate(resolve));
 
+      // No row is read back here, so the edit lands only on the row it claims: its chat (in each dialect) and side,
+      // with no engine ref, or with the ref of an API send delivered to another chat than its caller addressed.
       expect(messageRepository.update).toHaveBeenCalledWith(
         {
           sessionId: 'sess-uuid-1',
           waMessageId: 'WA_MSG_EDIT_1',
+          chatId: expect.objectContaining({
+            _type: 'raw',
+            _objectLiteralParameters: { claimedChats: ['123@c.us', '123@s.whatsapp.net', '123@hosted'] },
+          }) as unknown,
+          direction: 'incoming',
           type: Not('revoked'),
           body: Or(Not('New edited text'), IsNull()),
         },

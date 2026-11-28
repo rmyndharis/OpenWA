@@ -23,11 +23,15 @@ fi
 
 VOL=""
 SIGNAL_CONTAINER=""
+BOOT_CONTAINER=""
 
 # Only remove an image this script created — never one the caller handed us.
 cleanup() {
   if [ -n "$SIGNAL_CONTAINER" ]; then
     docker rm -f "$SIGNAL_CONTAINER" > /dev/null 2>&1 || true
+  fi
+  if [ -n "$BOOT_CONTAINER" ]; then
+    docker rm -f "$BOOT_CONTAINER" > /dev/null 2>&1 || true
   fi
   if [ -n "$VOL" ]; then
     docker volume rm -f "$VOL" > /dev/null 2>&1 || true
@@ -168,6 +172,36 @@ else
   echo "FAIL: a start as 12345 failed without the expected message: $OTHER" >&2
   exit 1
 fi
+
+echo ""
+echo "==> Booting the gateway with the openwa-api hardening from docker-compose.yml..."
+# Everything above runs a probe, never node dist/main, so a change that writes outside /app/data and /tmp
+# or needs a dropped capability would pass here and fail on `docker compose up`. These are the compose
+# flags, limits at their defaults; scripts/smoke-test-non-root.spec.js fails when the two drift apart.
+API_HARDENING="--read-only --tmpfs /tmp --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add KILL --cap-add SETGID --cap-add SETUID --security-opt no-new-privileges:true --pids-limit 2048 --memory 2g"
+# shellcheck disable=SC2086 # one flag per word
+BOOT_CONTAINER=$(docker run -d $API_HARDENING -v "$VOL":/app/data "$IMAGE_TAG")
+for attempt in $(seq 1 120); do
+  READY=$(docker exec "$BOOT_CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
+    http://localhost:2785/api/health/ready 2> /dev/null || true)
+  if [ "$READY" = 200 ]; then
+    break
+  fi
+  if [ "$(docker inspect --format '{{.State.Running}}' "$BOOT_CONTAINER")" != true ]; then
+    echo "FAIL: the hardened gateway exited with $(docker inspect --format '{{.State.ExitCode}}' "$BOOT_CONTAINER") before it was ready:" >&2
+    docker logs "$BOOT_CONTAINER" >&2 || true
+    exit 1
+  fi
+  if [ "$attempt" -eq 120 ]; then
+    echo "FAIL: /api/health/ready did not answer 200 in 120 tries a second apart (last: '$READY'):" >&2
+    docker logs "$BOOT_CONTAINER" >&2 || true
+    exit 1
+  fi
+  sleep 1
+done
+echo "PASS: the gateway boots and answers /api/health/ready under the compose hardening"
+docker rm -f "$BOOT_CONTAINER" > /dev/null
+BOOT_CONTAINER=""
 
 echo ""
 echo "All smoke tests passed!"

@@ -3,13 +3,13 @@ import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import type { ModuleRef } from '@nestjs/core';
 import type { ConfigService } from '@nestjs/config';
 import type { Request, Response } from 'express';
-import { DataSource } from 'typeorm';
+import { DataSource, QueryFailedError } from 'typeorm';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 import { BrowserSession } from './entities/browser-session.entity';
 import { AuthService, UnresolvedApiKeyException } from './auth.service';
 import { BrowserSessionService } from './browser-session.service';
 import { BrowserSessionController } from './browser-session.controller';
-import { HEADER_AUTH_ONLY_KEY, PUBLIC_KEY } from './decorators/auth.decorators';
+import { HEADER_AUTH_ONLY_KEY, PUBLIC_KEY, SIGNED_OUT_PROBE_KEY } from './decorators/auth.decorators';
 import {
   DEFAULT_BROWSER_SESSION_TTL_MS,
   MAX_BROWSER_SESSION_TTL_MS,
@@ -29,6 +29,9 @@ import { hashApiKey } from './api-key-hash';
 import type { ActiveKeyIndex } from './active-key-index';
 import type { EngineFactory } from '../../engine/engine.factory';
 import { EventsGateway } from '../events/events.gateway';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction, AuditLog } from '../audit/entities/audit-log.entity';
+import { ApiKeyUsageTracker } from './api-key-usage-tracker.service';
 import { ApiKeyCapability } from './api-key-permissions';
 
 describe('browser-session.util', () => {
@@ -540,6 +543,26 @@ describe('BrowserSessionService & CreateBrowserSessions migration (SQLite)', () 
     if (ds?.isInitialized) await ds.destroy();
   });
 
+  // SQLite serves every caller on one connection: a write another request makes while an implicit save
+  // transaction is open becomes part of it, and the rollback of a failed insert would discard it too.
+  it('does not roll back a concurrent write when storing a session fails', async () => {
+    const keys = ds.getRepository(ApiKey);
+    let beside = Promise.resolve();
+    ds.subscribers.push({
+      listenTo: () => BrowserSession,
+      beforeInsert: () => {
+        beside = (async () => {
+          await keys.update(activeKey.id, { name: 'Renamed Admin' });
+        })();
+        throw new Error('abort session insert');
+      },
+    });
+
+    await expect(service.createSession(activeKey)).rejects.toThrow('abort session insert');
+    await beside;
+    expect((await keys.findOneByOrFail({ id: activeKey.id })).name).toBe('Renamed Admin');
+  });
+
   it('stores only a hashed session token and re-validates live ApiKey permissions on every lookup', async () => {
     const { token, session } = await service.createSession(activeKey);
     expect(token.length).toBeGreaterThanOrEqual(40);
@@ -586,15 +609,47 @@ describe('BrowserSessionService & CreateBrowserSessions migration (SQLite)', () 
     await expect(service.validateSessionById(session.id, '127.0.0.1')).rejects.toThrow(UnauthorizedException);
   });
 
+  // Revoking or deleting a key also revokes its browser sessions. When that write fails the key change
+  // still stands, so the failure is logged with the key id, and the session left live is refused anyway
+  // because every cookie request re-validates the key it belongs to.
+  it.each([
+    ['revoke', (id: string) => authService.revoke(id), 'API key is revoked'],
+    ['delete', (id: string) => authService.delete(id), 'Invalid API key'],
+  ])(
+    'a failed browser-session revoke on key %s is logged with the key id and the session still cannot act',
+    async (_name, change, refusal) => {
+      const { token } = await service.createSession(activeKey);
+      const warn = jest
+        .spyOn((authService as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn')
+        .mockImplementation(() => undefined);
+      jest
+        .spyOn(ds.getRepository(BrowserSession), 'update')
+        .mockRejectedValueOnce(new QueryFailedError('UPDATE', [], new Error('SQLITE_BUSY: database is locked')));
+
+      await change(activeKey.id);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(activeKey.id),
+        expect.objectContaining({ keyId: activeKey.id, error: expect.stringContaining('SQLITE_BUSY') as string }),
+      );
+      const row = await ds.getRepository(BrowserSession).findOneByOrFail({ apiKeyId: activeKey.id });
+      expect(row.revokedAt).toBeNull();
+      await expect(service.validateSessionToken(token, '127.0.0.1')).rejects.toThrow(refusal);
+      await expect(service.validateSessionById(row.id, '127.0.0.1')).rejects.toThrow(UnauthorizedException);
+    },
+  );
+
   it('revokeByToken marks revokedAt, refreshes key index, evicts WS sockets, and blocks reuse', async () => {
     const { token, session } = await service.createSession(activeKey);
     keyIndex.refreshSoon.mockClear();
 
-    const revokedId = await service.revokeByToken(token);
-    expect(revokedId).toBe(session.id);
+    const revoked = await service.revokeByToken(token);
+    expect(revoked?.id).toBe(session.id);
     expect(keyIndex.refreshSoon).toHaveBeenCalled();
     expect(evictBrowserSession).toHaveBeenCalledWith(session.id, 'logged_out');
     await expect(service.validateSessionToken(token, '127.0.0.1')).rejects.toThrow(UnresolvedApiKeyException);
+    // A second revoke finds nothing live to end.
+    await expect(service.revokeByToken(token)).resolves.toBeNull();
   });
 
   it('throws UnresolvedApiKeyException for expired sessions so guard audit limiting applies', async () => {
@@ -721,14 +776,299 @@ describe('BrowserSessionService & CreateBrowserSessions migration (SQLite)', () 
   });
 });
 
+describe('BrowserSessionController audit trail (SQLite)', () => {
+  let ds: DataSource;
+  let controller: BrowserSessionController;
+  let authService: AuthService;
+  let admin: ApiKey;
+  let operator: ApiKey;
+
+  const res = () => ({ setHeader: jest.fn() }) as unknown as Response;
+  const loginRequest = (cookie?: string) =>
+    ({
+      method: 'POST',
+      path: '/api/auth/session',
+      secure: true,
+      socket: { remoteAddress: '198.51.100.7' },
+      headers: {
+        'x-api-key': 'ow_header_key',
+        'user-agent': 'Mozilla/5.0 (test browser)',
+        ...(cookie ? { cookie: `openwa_session=${cookie}` } : {}),
+      },
+    }) as unknown as Request;
+  const logoutRequest = (cookie?: string) =>
+    ({
+      method: 'DELETE',
+      path: '/api/auth/session',
+      secure: true,
+      socket: { remoteAddress: '203.0.113.9' },
+      headers: {
+        host: 'wa.example.com',
+        origin: 'https://wa.example.com',
+        'sec-fetch-site': 'same-origin',
+        'x-requested-with': 'OpenWA-Dashboard',
+        'user-agent': 'Mozilla/5.0 (test browser)',
+        ...(cookie ? { cookie: `openwa_session=${cookie}` } : {}),
+      },
+    }) as unknown as Request;
+  const auditRows = () => ds.getRepository(AuditLog).find();
+  const tokenOf = (response: Response) =>
+    extractBrowserSessionCookie(
+      ((response.setHeader as jest.Mock).mock.calls as unknown[][]).find(([name]) => name === 'Set-Cookie')?.[1] as
+        string | undefined,
+    )!;
+
+  beforeEach(async () => {
+    ds = new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [ApiKey, BrowserSession, AuditLog],
+      synchronize: true,
+    });
+    await ds.initialize();
+    const keys = ds.getRepository(ApiKey);
+    const moduleRef = { get: () => undefined } as unknown as ModuleRef;
+    authService = new AuthService(keys, new ApiKeyUsageTracker(keys), moduleRef);
+    const sessions = new BrowserSessionService(ds.getRepository(BrowserSession), authService, moduleRef);
+    controller = new BrowserSessionController(
+      sessions,
+      { getCurrentEngine: () => 'baileys' } as unknown as EngineFactory,
+      { get: () => undefined } as unknown as ConfigService,
+      new AuditService(ds.getRepository(AuditLog)),
+      authService,
+    );
+    admin = (await authService.createApiKey({ name: 'Front desk admin', role: ApiKeyRole.ADMIN })).apiKey;
+    operator = (await authService.createApiKey({ name: 'Night shift', role: ApiKeyRole.OPERATOR })).apiKey;
+  });
+
+  afterEach(async () => {
+    if (ds?.isInitialized) await ds.destroy();
+  });
+
+  it('records who opened a browser session, from where, and which session it was', async () => {
+    const response = res();
+    await controller.createSession(admin, loginRequest(), response);
+
+    const [session] = await ds.getRepository(BrowserSession).find();
+    const rows = await auditRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      action: AuditAction.BROWSER_SESSION_CREATED,
+      severity: 'info',
+      apiKeyId: admin.id,
+      apiKeyName: 'Front desk admin',
+      ipAddress: '198.51.100.7',
+      userAgent: 'Mozilla/5.0 (test browser)',
+      method: 'POST',
+      path: '/api/auth/session',
+      metadata: { browserSessionId: session.id },
+    });
+    expect(JSON.stringify(rows[0])).not.toContain(tokenOf(response));
+  });
+
+  it('records a logout once, under the key the session belonged to, and not for a cookie already ended', async () => {
+    const response = res();
+    await controller.createSession(admin, loginRequest(), response);
+    const token = tokenOf(response);
+    const [session] = await ds.getRepository(BrowserSession).find();
+
+    await controller.deleteSession(logoutRequest(token), res());
+    await controller.deleteSession(logoutRequest(token), res());
+    await controller.deleteSession(logoutRequest(), res());
+    await controller.deleteSession(logoutRequest('never-issued'), res());
+
+    const ended = (await auditRows()).filter(row => row.action === AuditAction.BROWSER_SESSION_ENDED);
+    expect(ended).toHaveLength(1);
+    expect(ended[0]).toMatchObject({
+      apiKeyId: admin.id,
+      apiKeyName: 'Front desk admin',
+      ipAddress: '203.0.113.9',
+      method: 'DELETE',
+      path: '/api/auth/session',
+      metadata: { browserSessionId: session.id },
+    });
+  });
+
+  it('still names the key id when a logout ends a session whose key row is already gone', async () => {
+    const response = res();
+    await controller.createSession(operator, loginRequest(), response);
+    await ds.getRepository(ApiKey).delete({ id: operator.id });
+
+    await controller.deleteSession(logoutRequest(tokenOf(response)), res());
+
+    const ended = (await auditRows()).find(row => row.action === AuditAction.BROWSER_SESSION_ENDED);
+    expect(ended).toMatchObject({ apiKeyId: operator.id, apiKeyName: null });
+  });
+
+  // The revoke has landed by then, and the audit trail is best effort: only the row's key name is at stake.
+  it('signs out, and signs in over an old cookie, when the ended session key cannot be read', async () => {
+    const first = res();
+    await controller.createSession(admin, loginRequest(), first);
+    const second = res();
+    await controller.createSession(operator, loginRequest(), second);
+    jest.spyOn(authService, 'findAuthorizationStates').mockRejectedValue(new Error('SQLITE_BUSY: database is locked'));
+
+    const loggedOut = res();
+    await expect(controller.deleteSession(logoutRequest(tokenOf(first)), loggedOut)).resolves.toEqual({ ok: true });
+    expect(tokenOf(loggedOut)).toBeUndefined();
+    await expect(controller.createSession(operator, loginRequest(tokenOf(second)), res())).resolves.toMatchObject({
+      valid: true,
+    });
+
+    const ended = (await auditRows()).filter(row => row.action === AuditAction.BROWSER_SESSION_ENDED);
+    expect(ended.map(row => [row.apiKeyId, row.apiKeyName]).sort()).toEqual(
+      [
+        [admin.id, null],
+        [operator.id, null],
+      ].sort(),
+    );
+  });
+
+  it('records the replaced session under its own key when a new login supersedes an older cookie', async () => {
+    const first = res();
+    await controller.createSession(admin, loginRequest(), first);
+    const [adminSession] = await ds.getRepository(BrowserSession).find();
+
+    await controller.createSession(operator, loginRequest(tokenOf(first)), res());
+
+    // Rows written in the same second have no stored order, so they are compared sorted.
+    const rows = await auditRows();
+    expect(rows.map(row => `${row.action} ${row.apiKeyName}`).sort()).toEqual([
+      'browser_session_created Front desk admin',
+      'browser_session_created Night shift',
+      'browser_session_ended Front desk admin',
+    ]);
+    expect(rows.find(row => row.action === AuditAction.BROWSER_SESSION_ENDED)?.metadata).toEqual({
+      browserSessionId: adminSession.id,
+    });
+  });
+});
+
+// Behind a TLS-terminating proxy that TRUSTED_PROXIES does not name, the gateway ignores X-Forwarded-Proto and
+// issues the admin cookie without Secure. A sign-in is the only place that can see it happening.
+describe('BrowserSessionController warning for a cookie issued without Secure behind a proxy', () => {
+  const savedSecure = process.env.DASHBOARD_SESSION_COOKIE_SECURE;
+
+  beforeEach(() => {
+    delete process.env.DASHBOARD_SESSION_COOKIE_SECURE;
+  });
+
+  afterEach(() => {
+    if (savedSecure === undefined) delete process.env.DASHBOARD_SESSION_COOKIE_SECURE;
+    else process.env.DASHBOARD_SESSION_COOKIE_SECURE = savedSecure;
+  });
+
+  const setup = (config: { trustedProxies?: string[]; override?: boolean } = {}) => {
+    const controller = new BrowserSessionController(
+      {
+        createSession: jest.fn().mockResolvedValue({ token: 'tok', session: { id: 'bs-1' }, ttlMs: 3600_000 }),
+        revokeByToken: jest.fn(),
+      } as unknown as BrowserSessionService,
+      { getCurrentEngine: () => 'baileys' } as unknown as EngineFactory,
+      {
+        get: (key: string) =>
+          key === 'security.trustedProxies'
+            ? (config.trustedProxies ?? [])
+            : key === 'auth.dashboardSessionCookieSecure'
+              ? config.override
+              : undefined,
+      } as unknown as ConfigService,
+      { logInfo: jest.fn() } as unknown as AuditService,
+      { findAuthorizationStates: jest.fn(() => []) } as unknown as AuthService,
+    );
+    const warn = jest
+      .spyOn((controller as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    const signIn = async (forwardedProto?: string, peer = '198.51.100.10'): Promise<string> => {
+      const setHeader = jest.fn();
+      await controller.createSession(
+        { id: 'k-admin', role: ApiKeyRole.ADMIN } as ApiKey,
+        {
+          method: 'POST',
+          path: '/api/auth/session',
+          secure: false,
+          socket: { remoteAddress: peer },
+          headers: {
+            'x-api-key': 'ow_raw_secret',
+            ...(forwardedProto === undefined ? {} : { 'x-forwarded-proto': forwardedProto }),
+          },
+        } as unknown as Request,
+        { setHeader } as unknown as Response,
+      );
+      return (setHeader.mock.calls as string[][]).find(([name]) => name === 'Set-Cookie')![1];
+    };
+    return { warn, signIn };
+  };
+
+  it('warns, naming both settings, when a sign-in forwarded as https gets a cookie without Secure', async () => {
+    const { warn, signIn } = setup();
+
+    // The last entry is the one the nearest proxy appended, the one the cookie decision reads.
+    expect(await signIn('http ,  HTTPS ')).not.toContain('Secure');
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0] as [string];
+    expect(message).toContain('TRUSTED_PROXIES');
+    expect(message).toContain('DASHBOARD_SESSION_COOKIE_SECURE');
+  });
+
+  it('warns once per process, not once per sign-in', async () => {
+    const { warn, signIn } = setup();
+
+    await signIn('https');
+    await signIn('https');
+
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  // Every row carries all five values: a shorter row would hand jest's done callback to the test as `peer`.
+  it.each<[string, Parameters<typeof setup>[0], string | undefined, string | undefined, string | undefined]>([
+    ['plain HTTP with no forwarded scheme', {}, undefined, undefined, undefined],
+    ['a forwarded scheme of http', {}, 'http', undefined, undefined],
+    ['an https the client sent, before a proxy that saw plain http', {}, 'https, http', undefined, undefined],
+    [
+      'a trusted proxy that appended http after a client-sent https',
+      { trustedProxies: ['10.0.0.1'] },
+      'https, http',
+      '10.0.0.1',
+      undefined,
+    ],
+    [
+      'a trusted proxy, whose https already makes the cookie Secure',
+      { trustedProxies: ['10.0.0.1'] },
+      'https',
+      '10.0.0.1',
+      undefined,
+    ],
+    ['an override of true', { override: true }, 'https', undefined, undefined],
+    ['an override of false', { override: false }, 'https', undefined, undefined],
+    ['an override of false from the environment alone', {}, 'https', undefined, 'false'],
+  ])('stays silent for %s', async (_case, config, forwardedProto, peer, envOverride) => {
+    if (envOverride !== undefined) process.env.DASHBOARD_SESSION_COOKIE_SECURE = envOverride;
+    const { warn, signIn } = setup(config);
+
+    await signIn(forwardedProto, peer);
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
 describe('BrowserSessionController', () => {
   const createSession = jest.fn();
   const revokeByToken = jest.fn();
   const browserSessionService = { createSession, revokeByToken } as unknown as BrowserSessionService;
   const engineFactory = { getCurrentEngine: jest.fn(() => 'baileys') } as unknown as EngineFactory;
   const configService = { get: jest.fn(() => ['10.0.0.1']) } as unknown as ConfigService;
+  const auditService = { logInfo: jest.fn() } as unknown as AuditService;
+  const authService = { findAuthorizationStates: jest.fn(() => []) } as unknown as AuthService;
 
-  const controller = new BrowserSessionController(browserSessionService, engineFactory, configService);
+  const controller = new BrowserSessionController(
+    browserSessionService,
+    engineFactory,
+    configService,
+    auditService,
+    authService,
+  );
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -748,6 +1088,15 @@ describe('BrowserSessionController', () => {
     expect(Reflect.getMetadata(HEADER_AUTH_ONLY_KEY, createHandler)).toBe(true);
     expect(Reflect.getMetadata(PUBLIC_KEY, deleteHandler)).toBe(true);
     expect(Object.keys(deleteResponses)).toContain('403');
+  });
+
+  it('marks only GET /auth/session as @SignedOutProbe(), not the controller or its other routes', () => {
+    const handler = (name: keyof BrowserSessionController) =>
+      Object.getOwnPropertyDescriptor(BrowserSessionController.prototype, name)?.value as object;
+    expect(Reflect.getMetadata(SIGNED_OUT_PROBE_KEY, handler('getSession'))).toBe(true);
+    expect(Reflect.getMetadata(SIGNED_OUT_PROBE_KEY, handler('createSession'))).toBeUndefined();
+    expect(Reflect.getMetadata(SIGNED_OUT_PROBE_KEY, handler('deleteSession'))).toBeUndefined();
+    expect(Reflect.getMetadata(SIGNED_OUT_PROBE_KEY, BrowserSessionController)).toBeUndefined();
   });
 
   it('POST /auth/session mints opaque cookie with HttpOnly SameSite=Strict and never leaks secrets in body', async () => {

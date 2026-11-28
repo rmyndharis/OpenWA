@@ -4,6 +4,7 @@ import 'reflect-metadata';
 import { randomBytes } from 'crypto';
 import { DataSource, Repository, SelectQueryBuilder } from 'typeorm';
 import { InfraDataService } from '../infra/infra-data.service';
+import { readExport } from '../../../test/helpers/read-export';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { Message, MessageDirection } from './entities/message.entity';
@@ -187,7 +188,7 @@ const deferred = () => {
   });
 
   it.each(['chat', 'time', 'type'] as const)('preserves the original %s selection after data restore', async drift => {
-    const archive = await infra.exportData();
+    const archive = await readExport(infra.exportData());
     const row = archive.tables.messages.find(message => message.id === MID)!;
     expect(row).toBeDefined();
     row.body = 'replacement-outside-selection';

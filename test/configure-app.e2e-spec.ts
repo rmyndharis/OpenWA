@@ -715,3 +715,209 @@ describe('requests during shutdown teardown (configureApp)', () => {
     }
   });
 });
+
+// The module object the guard reads: a namespace import would be a copy, which cannot be spied on.
+const v8 = jest.requireActual<typeof import('v8')>('v8');
+
+describe('production HTTP surface with the body cap raised for a restore', () => {
+  const MB = 1024 * 1024;
+  let app: INestApplication<App>;
+  const previousBodyLimit = process.env.BODY_SIZE_LIMIT;
+  const restored: number[] = [];
+
+  /** Stands in for the import route: notes the size of every body it was handed. */
+  @Controller('api/infra')
+  class ImportStubController {
+    @Post('import-data')
+    @HttpCode(200)
+    importData(@Req() req: Request & { rawBody?: Buffer }) {
+      restored.push(req.rawBody?.length ?? 0);
+      return { imported: true };
+    }
+  }
+
+  /** Whether the index has been reloaded since 'late-key' was created, as a write on another node leaves it. */
+  let reloaded = false;
+  let reloads = 0;
+  /** 'known-key' lost its admin role on another node: the index says so only once it has reloaded. */
+  let demotedElsewhere = false;
+
+  @Module({
+    controllers: [ImportStubController],
+    providers: [
+      {
+        provide: ActiveKeyIndex,
+        useValue: {
+          // Both keys are active; only 'known-key' is an admin no restriction limits, and 'late-key' once read.
+          recognise: (headers: { 'x-api-key'?: unknown }) =>
+            headers['x-api-key'] === 'known-key' || headers['x-api-key'] === 'viewer-key' ? 'h' : undefined,
+          isUnscopedAdmin: (headers: { 'x-api-key'?: unknown }) =>
+            (headers['x-api-key'] === 'known-key' && !(demotedElsewhere && reloaded)) ||
+            (headers['x-api-key'] === 'late-key' && reloaded),
+          refresh: () => {
+            reloads++;
+            reloaded = true;
+            return Promise.resolve();
+          },
+        },
+      },
+    ],
+  })
+  class RestoreSurfaceModule {}
+
+  beforeAll(async () => {
+    process.env.BODY_SIZE_LIMIT = '64mb';
+    app = await NestFactory.create<INestApplication<App>>(RestoreSurfaceModule, { bodyParser: false, logger: false });
+    configureApp(app);
+    await app.init();
+  });
+
+  beforeEach(() => {
+    restored.length = 0;
+    reloaded = false;
+    reloads = 0;
+    demotedElsewhere = false;
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    if (previousBodyLimit === undefined) delete process.env.BODY_SIZE_LIMIT;
+    else process.env.BODY_SIZE_LIMIT = previousBodyLimit;
+  });
+
+  const freeHeap = (bytes: number): void => {
+    const heap = v8.getHeapStatistics();
+    jest.spyOn(v8, 'getHeapStatistics').mockReturnValue({ ...heap, heap_size_limit: heap.used_heap_size + bytes });
+  };
+
+  /** Declared and not sent: an answer that waited for the body would never come. */
+  const declare = (bytes: number, key?: string) => {
+    const post = request(app.getHttpServer())
+      .post('/api/infra/import-data')
+      .set('Content-Type', 'application/json')
+      .set('Content-Length', String(bytes))
+      .timeout({ deadline: 5000, response: 5000 });
+    return (key ? post.set('X-API-Key', key) : post).send('{}');
+  };
+
+  it('refuses a backup the free heap cannot restore before the body parser reads it', async () => {
+    freeHeap(50 * MB);
+
+    // Within the cap and the in-flight budget, so only the heap stands against it.
+    const res = await declare(40 * MB, 'known-key');
+
+    expect(res.status).toBe(413);
+    expect(res.body).toEqual({
+      statusCode: 413,
+      error: 'Payload Too Large',
+      code: 'IMPORT_TOO_LARGE',
+      message:
+        `The backup is ${40 * MB} bytes, and with the memory this process has free it can restore at most ` +
+        `${25 * MB}. Raise the memory of the process, or restore a copy made by scripts/backup.sh with ` +
+        'scripts/restore.sh instead.',
+    });
+    expect(restored).toEqual([]);
+  });
+
+  it.each([
+    ['without a key', undefined],
+    ['with a key the route would refuse', 'viewer-key'],
+  ])('refuses a caller %s above the default cap, however much heap is free', async (_caller, key) => {
+    freeHeap(64 * 1024 * MB);
+
+    const res = await declare(40 * MB, key);
+
+    expect(res.status).toBe(413);
+    expect(res.body).toEqual({
+      statusCode: 413,
+      error: 'Payload Too Large',
+      code: 'IMPORT_TOO_LARGE',
+      message:
+        `A backup above ${25 * MB} bytes is read only from a caller with an admin API key ` +
+        'that no session or chat restriction limits.',
+    });
+    expect(restored).toEqual([]);
+  });
+
+  /** A backup of exactly `bytes` in UTF-8, with an emoji in its one message or all in ASCII. */
+  const archive = (bytes: number, emoji: boolean): string => {
+    const head = `{"tables":{"messages":[{"body":"${emoji ? String.fromCodePoint(0x1f60a) : 'Halo'}`;
+    const tail = '"}]}}';
+    return head + 'a'.repeat(bytes - Buffer.byteLength(head) - tail.length) + tail;
+  };
+  // A string goes out as it is; superagent would serialize a Buffer as JSON.
+  const post = (body: string) =>
+    request(app.getHttpServer())
+      .post('/api/infra/import-data')
+      .set('Content-Type', 'application/json')
+      .set('X-API-Key', 'known-key')
+      .timeout({ deadline: 20000, response: 20000 })
+      .send(body);
+
+  it('refuses, once it is read and before it is parsed, a backup outside Latin-1 and too large for that', async () => {
+    // The heap takes 44.8 MiB of a backup that fits Latin-1 and 28 MiB of any other.
+    freeHeap(112 * MB);
+    const parse = jest.spyOn(JSON, 'parse');
+
+    const res = await post(archive(30 * MB, true));
+
+    expect(res.status).toBe(413);
+    expect(res.body).toEqual({
+      statusCode: 413,
+      error: 'Payload Too Large',
+      code: 'IMPORT_TOO_LARGE',
+      message:
+        `The backup is ${30 * MB} bytes and holds characters outside Latin-1, so a restore keeps its text at ` +
+        `two bytes a character: with the memory this process has free it can restore at most ${28 * MB} bytes of ` +
+        'such a backup. Raise the memory of the process, or restore a copy made by scripts/backup.sh with ' +
+        'scripts/restore.sh instead.',
+    });
+    expect(restored).toEqual([]);
+    expect(parse.mock.calls.filter(([source]) => String(source).length > MB)).toEqual([]);
+
+    // The same backup in ASCII, and one with the emoji of the size the heap allows, are both restored.
+    await expect(post(archive(30 * MB, false))).resolves.toMatchObject({ status: 200 });
+    await expect(post(archive(28 * MB, true))).resolves.toMatchObject({ status: 200 });
+    expect(restored).toEqual([30 * MB, 28 * MB]);
+  }, 30000);
+
+  it('reads the keys again before refusing a large restore, so one made on another node is not turned away', async () => {
+    freeHeap(112 * MB);
+
+    await expect(post(archive(30 * MB, false)).set('X-API-Key', 'late-key')).resolves.toMatchObject({ status: 200 });
+    expect(restored).toEqual([30 * MB]);
+    expect(reloads).toBe(1);
+  }, 30000);
+
+  it('judges a key demoted on another node as it is now, and tells it no figure', async () => {
+    demotedElsewhere = true;
+    freeHeap(50 * MB);
+
+    const res = await declare(40 * MB, 'known-key');
+
+    expect(res.status).toBe(413);
+    expect((res.body as { message: string }).message).toBe(
+      `A backup above ${25 * MB} bytes is read only from a caller with an admin API key ` +
+        'that no session or chat restriction limits.',
+    );
+  });
+
+  it('weighs a form-encoded body the same way, which its parser decodes whole too', async () => {
+    freeHeap(112 * MB);
+    const form = (emoji: boolean) =>
+      request(app.getHttpServer())
+        .post('/api/infra/import-data')
+        .set('Content-Type', 'application/x-www-form-urlencoded')
+        .set('X-API-Key', 'known-key')
+        .timeout({ deadline: 20000, response: 20000 })
+        .send(`tables=${emoji ? String.fromCodePoint(0x1f60a) : 'Halo'}${'a'.repeat(30 * MB - 11)}`);
+
+    await expect(form(true)).resolves.toMatchObject({ status: 413, body: { code: 'IMPORT_TOO_LARGE' } });
+    await expect(form(false)).resolves.toMatchObject({ status: 200 });
+    expect(restored).toEqual([30 * MB]);
+  }, 30000);
+});

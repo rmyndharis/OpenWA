@@ -25,6 +25,6 @@ import { EngineRegistry } from './engine-registry.service';
     StoredChatPreviewService,
     EngineRegistry,
   ],
-  exports: [EngineFactory, LidMappingStoreService, ChatStateStoreService, EngineRegistry],
+  exports: [EngineFactory, LidMappingStoreService, ChatStateStoreService, BaileysMessageStoreService, EngineRegistry],
 })
 export class EngineModule {}

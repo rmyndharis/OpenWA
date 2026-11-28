@@ -32,7 +32,10 @@ export interface BaileysMessageStore {
    */
   remove(sessionId: string, messageId: string, shouldRemove: (stored: WAMessage) => boolean): Promise<void>;
   /** Remove all stored messages for a session (called on logout). */
-  clearSession(sessionId: string): Promise<void>;
+  /** Delete a session's stored messages, or (`before`, an unlink) those written up to that time. */
+  clearSession(sessionId: string, before?: Date): Promise<void>;
+  /** Read a session's messages written up to `upTo` as absent until clearSession deletes them. */
+  hideUpTo?(sessionId: string, upTo: Date): void;
 }
 
 /**

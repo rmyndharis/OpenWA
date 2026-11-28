@@ -115,6 +115,7 @@ for (const [key, name] of [
   ['SESSION_DATA_PATH', 'sessions'],
   ['BAILEYS_AUTH_DIR', 'baileys'],
   ['STORAGE_LOCAL_PATH', 'media'],
+  ['RECOVERY_JOURNAL_PATH', 'recovery-journal.jsonl'],
 ] as const) {
   process.env[key] = join(tmpdir(), `openwa-e2e-${name}-${e2eRunId}`);
 }

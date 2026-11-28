@@ -12,6 +12,8 @@ import {
 export const WS_RESTRICTED_NODES_KEY = 'openwa:ws:restricted-nodes';
 /** Per-node lease key prefix refreshed by each node's heartbeat while it holds restricted sockets. */
 export const WS_RESTRICTED_NODE_KEY_PREFIX = 'openwa:ws:restricted-node:';
+/** Written before a negative answer is trusted: a Redis that refuses writes cannot hold a node's lease. */
+export const WS_RESTRICTED_PROBE_KEY = 'openwa:ws:restricted-probe';
 /** Lease TTL for one node's presence entry in Redis (3 heartbeats). */
 export const WS_RESTRICTED_TTL_MS = 30_000;
 /** Heartbeat interval that renews a node's lease while it holds restricted sockets. */
@@ -99,8 +101,8 @@ export interface WsRestrictedPresenceOptions {
  * to the latest local state. Emitting nodes check the set before expanding chat identities through
  * `lid_mappings` and prune expired members atomically via Lua: when Redis confirms zero live
  * restricted nodes cluster-wide, DB lookups and chat-room fan-out are skipped. Any missing client,
- * disconnected state, or Redis error fails open (returns true) so chat-restricted subscribers never
- * lose events during a Redis outage.
+ * disconnected state, refused write, or Redis error fails open (returns true) so chat-restricted
+ * subscribers never lose events during a Redis outage.
  */
 export class WsRestrictedPresenceTracker {
   private readonly logger = createLogger('WsRestrictedPresence');
@@ -120,6 +122,8 @@ export class WsRestrictedPresenceTracker {
   private syncLoop: Promise<void> | null = null;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private pendingCheck: Promise<boolean> | null = null;
+  /** Until then a negative answer is not trusted: Redis refused a write, and nodes register again on a heartbeat. */
+  private distrustUntil = 0;
   private cachedCheck: { value: boolean; expiresAt: number } | null = null;
   private checkEpoch = 0;
 
@@ -207,10 +211,10 @@ export class WsRestrictedPresenceTracker {
   /**
    * Returns false only when Redis positively confirms zero active nodes hold a chat-restricted
    * socket; returns true (fail-open) if any node has a live lease or if Redis is absent,
-   * disconnected, or errors.
+   * disconnected, refusing writes, or errors.
    */
   hasRestrictedNodes(): Promise<boolean> {
-    if (!this.isReady()) return Promise.resolve(true);
+    if (!this.isReady() || Date.now() < this.distrustUntil) return Promise.resolve(true);
     const now = Date.now();
     if (this.cacheTtlMs > 0 && this.cachedCheck && now < this.cachedCheck.expiresAt) {
       return Promise.resolve(this.cachedCheck.value);
@@ -301,6 +305,19 @@ export class WsRestrictedPresenceTracker {
     return this.client.status === undefined || this.client.status === 'ready';
   }
 
+  /**
+   * Throws while Redis refuses writes (over maxmemory, or a read-only replica): a node cannot renew or register
+   * its lease then, so a missing one says nothing, and no member is pruned.
+   */
+  private async assertAcceptsWrites(): Promise<void> {
+    try {
+      await this.client!.set(WS_RESTRICTED_PROBE_KEY, '1', 'PX', 1_000);
+    } catch (err) {
+      this.distrustUntil = Date.now() + 2 * this.heartbeatMs;
+      throw err;
+    }
+  }
+
   private leaseKey(member: string): string {
     return `${WS_RESTRICTED_NODE_KEY_PREFIX}${member}`;
   }
@@ -345,6 +362,7 @@ export class WsRestrictedPresenceTracker {
     try {
       const members = await this.client!.smembers(WS_RESTRICTED_NODES_KEY);
       if (!Array.isArray(members) || members.length === 0) {
+        await this.assertAcceptsWrites();
         if (this.cacheTtlMs > 0 && epoch === this.checkEpoch && !this.destroyed) {
           this.cachedCheck = { value: false, expiresAt: Date.now() + this.cacheTtlMs };
         }
@@ -361,6 +379,7 @@ export class WsRestrictedPresenceTracker {
         }
       }
       if (dead.length > 0) {
+        await this.assertAcceptsWrites();
         for (let offset = 0; offset < dead.length; offset += PRUNE_CHUNK_SIZE) {
           const batch = dead.slice(offset, offset + PRUNE_CHUNK_SIZE);
           const leaseKeys = batch.map(member => this.leaseKey(member));

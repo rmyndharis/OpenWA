@@ -138,6 +138,8 @@ describe('the FAILED writers fenced on ownership', () => {
       if (!owns) f.loseLease();
 
       await f.lifecycle.handleEngineDisconnected(ID, f.registry.get(ID)!, 'NAVIGATION');
+      // The FAILED goes out once the DISCONNECTED written before it has landed.
+      await new Promise(resolve => setImmediate(resolve));
 
       expect(f.failedWrites()).toBe(writes);
       // The rest of the terminal path runs either way: the reason, the eviction, the dropped reconnect.

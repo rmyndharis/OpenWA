@@ -62,6 +62,17 @@ export interface MessageRow {
   mediaPath: string | null;
   mediaMimetype: string | null;
   /**
+   * The engine's chat, direction and author of a message a hook filed under others (nullable JSON; added after
+   * mediaMimetype, keep the import list in sync). Dropping it on import would judge such a row by the chat the hook
+   * chose again.
+   */
+  engineRef?: string | Record<string, unknown> | null;
+  /**
+   * The message id of the own-send echo's row an API send's row is still to be merged onto (nullable; added after
+   * engineRef, keep the import list in sync). Dropping it on import would leave the row in its thread twice for good.
+   */
+  echoOf?: string | null;
+  /**
    * Postgres-only STORED generated tsvector (FTS). Present in `SELECT *` rows read from a Postgres
    * source (and in backups made before it was stripped) but never a real payload column: export drops
    * it, and the import's explicit column list ignores it. Declared so both directions type-check.
@@ -205,6 +216,7 @@ export interface WebhookOutboxEventRow {
   attempts: number;
   lastAttemptAt: string | null;
   createdAt: string;
+  engineRef?: string | Record<string, unknown> | null;
 }
 
 export interface IntegrationDeliveryFailureRow {

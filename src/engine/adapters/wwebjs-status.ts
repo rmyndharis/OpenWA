@@ -9,6 +9,7 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { throwIfCutByReload, toMessageMedia } from './wwebjs-messaging';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
 import { type WwebjsEngineHost, navigationsSeen, requireClient, withPageWrite, reportPageDeath } from './wwebjs-host';
@@ -121,7 +122,7 @@ export class WwebjsStatus {
       } catch (error) {
         if (this.host.isPageTransportError(error)) {
           this.host.reportIfPageTransportError(error, 'collectStatuses');
-          break;
+          throw new EngineTransportError('Transport died during collectStatuses');
         }
         throw error;
       }
@@ -130,7 +131,6 @@ export class WwebjsStatus {
         ...(contact.name ? { name: contact.name } : {}),
         ...(contact.pushname ? { pushName: contact.pushname } : {}),
       };
-      let aborted = false;
       for (const msg of eligible) {
         const ts = new Date(msg.timestamp * 1000);
         // Reuse the same capped/limited/timeout-bounded inbound media download the live message path
@@ -142,8 +142,7 @@ export class WwebjsStatus {
           } catch (error) {
             if (this.host.isPageTransportError(error)) {
               this.host.reportIfPageTransportError(error, 'collectStatuses');
-              aborted = true;
-              break;
+              throw new EngineTransportError('Transport died during collectStatuses');
             }
             this.host.logger.warn(`Failed to download media for status ${msg.id._serialized}: ${String(error)}`);
           }
@@ -169,7 +168,6 @@ export class WwebjsStatus {
           expiresAt: new Date(ts.getTime() + 24 * 3_600_000),
         });
       }
-      if (aborted) break;
     }
     return statuses;
   }

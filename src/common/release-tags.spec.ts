@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
 
-type Step = { id?: string; name?: string; run?: string; with?: Record<string, string> };
+type Step = { id?: string; name?: string; run?: string; env?: Record<string, string>; with?: Record<string, string> };
 type Job = { needs?: string[]; outputs?: Record<string, string>; steps?: Step[] };
 type Workflow = { jobs: Record<string, Job> };
 
@@ -33,6 +33,8 @@ describe('release.yml release-tags', () => {
     JSON.stringify({ 'linux/amd64': platform(amd64), [arm64Key]: platform(arm64) });
 
   const MANIFEST_UNKNOWN = '{"errors":[{"code":"MANIFEST_UNKNOWN","message":"manifest unknown"}]}';
+  const BUILT = 'sha256:1111111111111111111111111111111111111111111111111111111111111111';
+  const OTHER = 'sha256:2222222222222222222222222222222222222222222222222222222222222222';
 
   type Registry = { down?: boolean; status?: number; body?: string };
   type Scenario = {
@@ -41,6 +43,10 @@ describe('release.yml release-tags', () => {
     tags: string[];
     /** Channel tag -> output of the image inspection; a tag left out is not found by `docker`. */
     images?: Record<string, string>;
+    /** Exact version tag -> the digest it already serves; a tag left out is not found by `docker`. */
+    digests?: Record<string, string>;
+    /** The digest this run built. */
+    built?: string;
     registry?: Registry;
   };
 
@@ -51,12 +57,14 @@ describe('release.yml release-tags', () => {
       const fake = join(directory, 'fake');
       mkdirSync(bin);
       mkdirSync(join(fake, 'image'), { recursive: true });
+      mkdirSync(join(fake, 'digest'));
       writeFileSync(
         join(bin, 'docker'),
         [
           '#!/bin/bash',
           '[ "$1 $2 $3" = "buildx imagetools inspect" ] || { echo "unexpected docker $*" >&2; exit 2; }',
-          'file="$FAKE_DIR/image/$(printf %s "$4" | tr "/:" "__")"',
+          'dir=image; [ "$6" != "{{.Manifest.Digest}}" ] || dir=digest',
+          'file="$FAKE_DIR/$dir/$(printf %s "$4" | tr "/:" "__")"',
           '[ -f "$file" ] && exec cat "$file"',
           'echo "ERROR: $4: not found" >&2',
           'exit 1',
@@ -87,6 +95,9 @@ describe('release.yml release-tags', () => {
       for (const [tag, json] of Object.entries(scenario.images ?? {})) {
         writeFileSync(join(fake, 'image', tag.replace(/[/:]/g, '_')), json);
       }
+      for (const [tag, digest] of Object.entries(scenario.digests ?? {})) {
+        writeFileSync(join(fake, 'digest', tag.replace(/[/:]/g, '_')), `${digest}\n`);
+      }
       const registry = scenario.registry ?? {};
       if (registry.down) writeFileSync(join(fake, 'registry-down'), '');
       writeFileSync(join(fake, 'manifest-status'), String(registry.status ?? 404));
@@ -104,6 +115,7 @@ describe('release.yml release-tags', () => {
           REF_NAME: scenario.refName,
           VERSION: scenario.version,
           TAGS: scenario.tags.join('\n'),
+          EXPECTED_DIGEST: scenario.built ?? BUILT,
           GITHUB_OUTPUT: outputFile,
         },
       });
@@ -123,6 +135,12 @@ describe('release.yml release-tags', () => {
   it('finds the script and the tools it needs', () => {
     expect(select.run).toContain('channel_version');
     expect(spawnSync('jq', ['--version']).status).toBe(0);
+  });
+
+  // The runs below hand the script EXPECTED_DIGEST themselves, so where the workflow takes it from is pinned here.
+  it('compares the exact tags with the digest the docker job built', () => {
+    expect(select.env?.EXPECTED_DIGEST).toBe('${{ needs.docker.outputs.digest }}');
+    expect(workflow.jobs['release-tags'].needs).toContain('docker');
   });
 
   it('moves every channel for a release that leads, and marks it Latest', () => {
@@ -195,8 +213,50 @@ describe('release.yml release-tags', () => {
     expect(run({ refName: 'v0.1.0', version: '0.1.0', tags })).toMatchObject({ status: 0, tags, latest: 'true' });
   });
 
+  // An image build is not reproducible, so a second full run of a published tag builds other content. The exact
+  // version tag keeps what it was published with; only this run's own digest may be applied to it again.
+  describe('never re-points a published exact version tag at other content', () => {
+    const tags = stableTags('0.27.0', '0.27');
+    const published = { [`${GHCR}:latest`]: image('0.27.0'), [`${HUB}:latest`]: image('0.27.0') };
+
+    it('selects it again when it already serves the digest this run built (failed jobs re-run)', () => {
+      const result = run({
+        refName: 'v0.27.0',
+        version: '0.27.0',
+        tags,
+        images: published,
+        digests: { [`${GHCR}:0.27.0`]: BUILT, [`${HUB}:0.27.0`]: BUILT },
+      });
+      expect(result).toMatchObject({ status: 0, tags, latest: 'true' });
+    });
+
+    it.each([
+      ['GHCR', `${GHCR}:0.27.0`],
+      ['Docker Hub', `${HUB}:0.27.0`],
+    ])('fails before promotion when %s serves it at another digest', (_registry, tag) => {
+      const result = run({ refName: 'v0.27.0', version: '0.27.0', tags, images: published, digests: { [tag]: OTHER } });
+      expect(result.status).not.toBe(0);
+      expect(result.output).toContain(`::error::${tag} is already published as ${OTHER}, not this run's ${BUILT}`);
+      expect(result.tags).toEqual([]);
+    });
+
+    it('fails for a prerelease the same way', () => {
+      const pre = [`${GHCR}:0.27.0-rc.1`, `${HUB}:0.27.0-rc.1`];
+      const result = run({ refName: 'v0.27.0-rc.1', version: '0.27.0-rc.1', tags: pre, digests: { [pre[0]]: OTHER } });
+      expect(result.status).not.toBe(0);
+      expect(result.output).toContain(`::error::${pre[0]} is already published as ${OTHER}`);
+      expect(result.tags).toEqual([]);
+    });
+  });
+
   describe('fails the release rather than guess, naming what it could not read', () => {
-    const base = { refName: 'v0.27.0', version: '0.27.0', tags: stableTags('0.27.0', '0.27') };
+    // The exact tags already serve this build, so every lookup below that fails is a channel's.
+    const base = {
+      refName: 'v0.27.0',
+      version: '0.27.0',
+      tags: stableTags('0.27.0', '0.27'),
+      digests: { [`${GHCR}:0.27.0`]: BUILT, [`${HUB}:0.27.0`]: BUILT },
+    };
 
     it.each([
       ['an unreachable registry', { down: true }, 'Cannot get a registry token for'],
@@ -214,6 +274,7 @@ describe('release.yml release-tags', () => {
       expect(result.output).toContain('::error::');
       expect(result.output).toContain(message);
       expect(result.output).toContain(`${GHCR}:0.27`);
+      expect(result.output).not.toContain(`${GHCR}:0.27.0`);
       expect(result.tags).toEqual([]);
     });
 
@@ -227,6 +288,20 @@ describe('release.yml release-tags', () => {
       expect(result.status).not.toBe(0);
       expect(result.output).toContain(message);
       expect(result.output).toContain(`::error::${GHCR}:latest`);
+      expect(result.tags).toEqual([]);
+    });
+
+    // A prerelease moves no channel, so the exact tags are the only lookups it makes.
+    it.each([
+      ['an unreachable registry', { down: true }, 'Cannot get a registry token for'],
+      ['HTTP 500', { status: 500, body: 'internal error' }, '(registry HTTP 500)'],
+    ] as [string, Registry, string][])('%s for an exact version tag that is not found', (_name, registry, message) => {
+      const pre = [`${GHCR}:0.27.0-rc.1`, `${HUB}:0.27.0-rc.1`];
+      const result = run({ refName: 'v0.27.0-rc.1', version: '0.27.0-rc.1', tags: pre, registry });
+      expect(result.status).not.toBe(0);
+      expect(result.output).toContain('::error::');
+      expect(result.output).toContain(message);
+      expect(result.output).toContain(pre[0]);
       expect(result.tags).toEqual([]);
     });
 

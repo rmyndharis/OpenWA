@@ -8,11 +8,28 @@ import { Queue } from 'bullmq';
 import { setTimeout } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { Webhook } from './entities/webhook.entity';
-import { WebhookOutboxService, type OutboxOpenRow, type ReplayableDelivery } from './webhook-outbox.service';
+import {
+  LOST_COPY_ERROR,
+  MESSAGE_CHANGE_EVENTS,
+  MESSAGE_DELIVERY_EVENTS,
+  WebhookOutboxService,
+  changedMessagePayload,
+  messageDeliveryKeys,
+  messageEditKeys,
+  type MessageCopyChange,
+  type MessageCopyFilter,
+  type MessageHold,
+  type MessageCopyPredicate,
+  type OutboxOpenRow,
+  type ReplayableDelivery,
+} from './webhook-outbox.service';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
+import type { MessageEngineRef } from '../message/entities/message.entity';
 import { clearDeliveryFailureRows, recordWebhookDeliveryFailure } from './utils/record-delivery-failure';
 import {
   buildDeliveryHeaders,
+  changedData,
+  dataHash,
   isDeliverableWebhook,
   postWebhookPayload,
   recordTerminalFailure,
@@ -24,13 +41,19 @@ import { incrementWebhookDeliveryFailures } from '../../common/metrics/webhook-d
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { producerReady } from '../queue/redis-connection';
 import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
+import { DeliveryPreflight } from './utils/delivery-preflight';
 import { evaluateFilters, prepareFilterLidResolver } from './filters/filter-evaluator';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { redactSsrfError } from '../../common/security/ssrf-guard';
 import { HookManager } from '../../core/hooks';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
-import { isPlainObject, isWebhookBeforeResult } from '../../core/hooks/hook-results';
 import { WILDCARD_EXCLUDED_EVENTS, subscriptionCoversEvent } from '../../common/utils/wildcard-events';
+import { RecoveryQueue, recoveryQueueOptions, type RecoveryLoss } from '../../common/utils/recovery-queue';
+import { RecoveryJournal } from '../../common/utils/recovery-journal';
+import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
+import { resolveNonNegativeIntEnv } from '../../config/configuration';
+import { ParkedDispatch, type ParkedDispatchSteps } from './parked-dispatch';
+import { jobHoldKey } from './utils/job-hold';
 
 export interface WebhookPayload {
   event: string;
@@ -40,6 +63,9 @@ export interface WebhookPayload {
   deliveryId: string;
   data: Record<string, unknown>;
 }
+
+/** How often the copies kept for queued deliveries are checked against their jobs (see onApplicationBootstrap). */
+const ORPHAN_COPY_CHECK_MS = 10 * 60 * 1000;
 
 export interface WebhookJobData {
   webhookId: string;
@@ -55,7 +81,40 @@ export interface WebhookJobData {
    * (inline media over WEBHOOK_MEDIA_INLINE_MAX_BYTES was shed before it was captured).
    */
   replayData?: Record<string, unknown>;
+  /**
+   * {@link dataHash} of the pre-hook data the delivery's outbox row held when the job was queued. A message delivery
+   * whose row holds other data by the time the worker runs was changed since (an edit or a delete through the API
+   * rewrote it), and the worker rebuilds the body from the row. Absent on a job queued before it existed, or when
+   * what the row held was not known: such a job posts its own body unless the row was closed.
+   */
+  baseHash?: string;
+  /**
+   * The message an edit event names in its pre-hook data, which a kept revoke's hold on the worker is matched by: a
+   * `webhook:before` hook may have given the body's `messageId` another value. Absent on a job queued before it existed.
+   */
+  messageId?: string;
+  /**
+   * The pre-hook event data of a message delivery or an edit event whose outbox row could not be written: what that row
+   * would hold. The node that queued it keeps its copy in memory; a worker of another node, with neither, judges the job
+   * by what that node wrote below, else by the message's stored row (a revoke withholds it, an edit rewrites it).
+   */
+  unwritten?: Record<string, unknown>;
+  /** Written by the node that queued it: its copy as a change of the message left it (null once withdrawn). */
+  unwrittenChange?: Record<string, unknown> | null;
+  /**
+   * Written by the node that queued it once a bound dropped its copy: the job is not sent but recorded as failed, with
+   * none of its data once a change of the message came after (`taken`).
+   */
+  unwrittenLost?: 'kept' | 'taken';
 }
+
+/**
+ * How long a job is held for a change the node that queued it keeps (a key Redis expires itself: see jobHoldKey), and
+ * how often that hold is renewed, so a node that stopped holds the job no longer than the lease.
+ */
+const JOB_HOLD_LEASE_MS = 60_000;
+const JOB_HOLD_RENEW_MS = 20_000;
+const WARN_JOB_MARK_EVERY_MS = 60_000;
 
 /**
  * One resolved webhook delivery ready to be persisted into the outbox inside a caller's database
@@ -69,15 +128,15 @@ export interface PreparedWebhookDelivery {
   deliveryId: string;
   idempotencyKey: string;
   outboxRow: OutboxOpenRow;
+  /**
+   * What the outbox row holds when it is not `baseData`: the {@link dataHash} of the older data a rewrite of the row
+   * failed to replace, or null when this dispatch did not write the row (another dispatch opened it under the same
+   * key). Undefined: the row holds `baseData`.
+   */
+  storedHash?: string | null;
+  /** Run when the delivery leaves no durable record (no outbox row, and its failure could not be written either). */
+  onUnrecorded?: () => void;
 }
-
-/**
- * Upper bound on the serialized webhook body after webhook:before hooks ran. Hook results are
- * untrusted — an unbounded mutation (or a genuinely huge media event) would POST a giant body and,
- * on failure, bloat the durable failure path. Oversize payloads are recorded as undelivered instead.
- * Default 1 MiB; override with WEBHOOK_MAX_PAYLOAD_BYTES.
- */
-const DEFAULT_WEBHOOK_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 // Decoded-byte cap for inline base64 media and the shed helper live in common/utils/inline-media:
 // the WebSocket gateway sheds message-event payloads with the SAME cap and marker, so the two
@@ -101,6 +160,22 @@ const OPT_IN_SUBSCRIPTIONS_TTL_MS = 5000;
 export const FAILING_WEBHOOKS_MAX = 10_000;
 
 /**
+ * Events not kept while the database refuses their dispatch: a presence that no longer holds once replayed, a linking
+ * code that expires within seconds (the next one goes out live), and the per-recipient receipts documented as bounded
+ * and never replayed.
+ */
+export const UNKEPT_EVENTS: readonly string[] = ['presence.update', 'session.qr', 'message.receipt'];
+
+/** Events that describe this node's engine of a session: once another node owns the session, its own go out instead. */
+const SESSION_STATE_EVENTS: readonly string[] = [
+  'session.status',
+  'session.authenticated',
+  'session.disconnected',
+  'session.reconnect_loop',
+  'session.restriction',
+];
+
+/**
  * The result of one delivery attempt. Reported, not thrown: every delivery failure below is already
  * handled in place, so a try/catch cannot tell a delivered event from a dead-lettered one. Two
  * exceptions escape, both from shutdown, and both keep the outbox row pending: 'ConcurrencyLimiter
@@ -118,6 +193,10 @@ interface DispatchEventContext {
   sessionId: string;
   event: string;
   baseData: Record<string, unknown>;
+  /** See {@link PreparedWebhookDelivery.onUnrecorded}. */
+  onUnrecorded?: () => void;
+  /** What the delivery's outbox row holds, as on {@link PreparedWebhookDelivery}. */
+  storedHash?: string | null;
   /** Gives the dispatch slot up while `fn` runs (a retry backoff). Absent outside the limiter. */
   yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R>;
   /**
@@ -133,6 +212,14 @@ interface DispatchEventContext {
    */
   oneDirectAttempt?: boolean;
   /**
+   * The delivery starts from the copy a failed delivery kept (an operator redrive), not from an open outbox row: its
+   * row was closed when the failure was recorded, which says nothing of a change, and the copy is kept current by
+   * every change, so the row is not consulted.
+   */
+  fromKeptCopy?: boolean;
+  /** The copy kept for it was dropped by a bound while it waited for a slot: it is stopped (see lostCopyFailure). */
+  copyLost?: boolean;
+  /**
    * Ends a replay's retry backoff early and gives no further attempt. A replay holds no dispatch
    * slot, so the shutdown drain's limiter close cannot stop it; its owner aborts this instead.
    */
@@ -142,10 +229,18 @@ interface DispatchEventContext {
 /** Per-delivery options of the direct path (deliverWebhook), derived from the dispatch context. */
 interface DirectDeliveryOptions {
   yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R>;
+  /**
+   * The pre-hook data the delivery was built from, and what its outbox row holds: a retry, and the terminal copy,
+   * check the row against it. Absent for a delivery that started from a kept copy, whose row is not consulted.
+   */
+  baseData?: Record<string, unknown>;
+  storedHash?: string | null;
   /** Kept on the terminal failure row for a redrive; set only while payload retention is on. */
   replayData?: Record<string, unknown>;
   singleAttempt?: boolean;
   signal?: AbortSignal;
+  /** See DispatchEventContext.copyLost. */
+  copyLost?: boolean;
 }
 
 class UnrecordedWebhookFailure extends Error {}
@@ -254,6 +349,22 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   private readonly optInSessionStages = new Map<string, { gate: ConcurrencyLimiter; stages: number }>();
   /** Aborted at the start of onModuleDestroy so retry backoff sleeps wake immediately. */
   private readonly shutdownAbort = new AbortController();
+  private readonly preflight: DeliveryPreflight;
+  /**
+   * What the database refused, kept until it answers: this service keeps its dispatches in it, and the message projector
+   * its changes, so one pass withdraws or rewrites what a change touches before the events it touches are dispatched.
+   */
+  private readonly recovery: RecoveryQueue;
+  // Per session, the dispatches kept: its new events go after them while there are any, in order.
+  private readonly parkedDispatches = new Map<string, Set<ParkedDispatch>>();
+  private parkSeq = 0;
+  // Whether this node still owns a session (set by the session module); a state event of one it no longer owns is
+  // dropped when it is dispatched at last.
+  private ownsSession?: (sessionId: string) => boolean;
+  private readonly parkSteps: ParkedDispatchSteps = {
+    dispatch: parked => this.dispatchKept(parked),
+    released: (parked, reason) => this.releaseKept(parked, reason),
+  };
 
   constructor(
     @InjectRepository(Webhook, 'data')
@@ -268,8 +379,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     @Optional()
     @InjectQueue(QUEUE_NAMES.WEBHOOK)
     private readonly webhookQueue?: Queue<WebhookJobData>,
+    @Optional()
+    private readonly journal?: RecoveryJournal,
+    @Optional()
+    private readonly pluginLoader?: PluginLoaderService,
   ) {
     this.queueEnabled = configService.get<boolean>('queue.enabled', false);
+    this.preflight = new DeliveryPreflight(failureRepository, configService, hookManager, this.logger);
     // Bound fan-out: cap how many webhook deliveries run CONCURRENTLY in this process. Every event and
     // session shares this one pool, so an event matching N webhooks cannot open N outbound sockets at
     // once. Default 16 (WEBHOOK_DISPATCH_CONCURRENCY).
@@ -280,6 +396,271 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     this.degradedSessionConcurrency =
       this.configService.get<number | undefined>('webhook.degradedSessionConcurrency') ??
       Math.max(1, Math.floor(dispatchConcurrency / 4));
+    this.recovery = new RecoveryQueue({
+      ...recoveryQueueOptions(
+        webhookRepository.manager?.connection?.options?.type === 'postgres',
+        // The sweep's grace (WebhookReconcilerService), which the waits on PostgreSQL stay under.
+        resolveNonNegativeIntEnv(process.env.WEBHOOK_RECONCILE_GRACE_MS, 60_000),
+      ),
+      journal,
+    });
+    // A worker of another node reads what this node knows of a job it queued with no outbox row from the job itself.
+    if (this.queueEnabled && this.webhookQueue) {
+      outbox.onQueuedCopyChanged((deliveryId, data, lost) =>
+        this.markJob(deliveryId, lost ? { lost } : { change: data }),
+      );
+    }
+    // A session's state as a dead process saw it would go out as current after a restart: those events stay in memory.
+    this.recovery.register('dispatch', {
+      encode: record => {
+        const parked = record as ParkedDispatch;
+        if (SESSION_STATE_EVENTS.includes(parked.event)) return undefined;
+        const { sessionId: s, event: e, data: d, occurrenceId: o, engineRef: r, only: w, since: t } = parked;
+        return { s, e, d, o, r, w, t };
+      },
+      decode: (key, value) => this.restoreDispatch(key, value),
+    });
+  }
+
+  /** A kept event the journal kept across a restart, back in its session's order under its own key and occurrence. */
+  private restoreDispatch(key: string, value: unknown): ParkedDispatch | undefined {
+    const v = value as {
+      s?: unknown;
+      e?: unknown;
+      d?: unknown;
+      o?: unknown;
+      r?: MessageEngineRef | null;
+      w?: unknown;
+      t?: unknown;
+    } | null;
+    if (
+      typeof v?.s !== 'string' ||
+      typeof v.e !== 'string' ||
+      typeof v.d !== 'object' ||
+      v.d === null ||
+      typeof v.o !== 'string' ||
+      typeof v.t !== 'number' ||
+      SESSION_STATE_EVENTS.includes(v.e)
+    ) {
+      return undefined;
+    }
+    const parked = new ParkedDispatch(
+      key,
+      v.s,
+      v.e,
+      v.d as Record<string, unknown>,
+      v.o,
+      v.r ?? null,
+      typeof v.w === 'string' ? v.w : null,
+      v.t,
+      this.parkSteps,
+    );
+    let session = this.parkedDispatches.get(v.s);
+    if (!session) this.parkedDispatches.set(v.s, (session = new Set()));
+    session.add(parked);
+    const seq = Number(key.slice(key.lastIndexOf('#') + 1));
+    if (Number.isInteger(seq)) this.parkSeq = Math.max(this.parkSeq, seq);
+    return parked;
+  }
+
+  /**
+   * Once every module is up: what the journal restored is tried once the plugins are back too, so their hooks see the
+   * changes and events it holds (a lane of it no owner took back is let go then). The copies kept for queued deliveries
+   * whose job is gone (it finished elsewhere, or Redis lost it) are dropped now and every ORPHAN_COPY_CHECK_MS, as
+   * nothing will read them: a withdrawn copy is kept until its delivery ends, so one whose job vanished would stay.
+   */
+  onApplicationBootstrap(): void {
+    const plugins = this.pluginLoader?.whenRestored();
+    if (plugins) void plugins.then(() => this.recovery.ready());
+    else this.recovery.ready();
+    void this.dropOrphanCopies();
+    if (this.queueEnabled && this.webhookQueue) {
+      // What a change left of a restored copy is written into its job again: a mark Redis had not taken before the
+      // stop is not lost. A kept change restored holds its jobs again when the projector restores it.
+      for (const { deliveryId, change, lost } of this.outbox.queuedCopies()) {
+        if (lost) this.markJob(deliveryId, { lost });
+        else if (change !== undefined) this.markJob(deliveryId, { change });
+      }
+      this.orphanCheck = setInterval(() => void this.dropOrphanCopies(), ORPHAN_COPY_CHECK_MS);
+      this.orphanCheck.unref?.();
+    }
+  }
+
+  private orphanCheck?: ReturnType<typeof setInterval>;
+  private checkingOrphans = false;
+
+  // What this node still has to write into, or keep renewing for, the jobs it queued with no outbox row, by job id: the
+  // message each carries and whether it is an edit event's, by which its hold is let go; whether a change is still to
+  // be written into the job, and a released hold's lease still to be removed.
+  private readonly jobMarks = new Map<
+    string,
+    {
+      held: boolean;
+      edit: boolean;
+      message?: string;
+      change?: Record<string, unknown> | null;
+      lost?: 'kept' | 'taken';
+      changeOwed: boolean;
+      releaseOwed: boolean;
+    }
+  >();
+  private jobMarkRenewal?: ReturnType<typeof setInterval>;
+  private markingJobs?: Promise<void>;
+  private markJobsAgain = false;
+  private readonly jobMarkWarning = { at: -Infinity, held: 0 };
+
+  /** Note what a job this node queued must say: the copy's state after a change, or whether a change of it is kept. */
+  private markJob(
+    deliveryId: string,
+    mark: {
+      change?: Record<string, unknown> | null;
+      lost?: 'kept' | 'taken';
+      held?: boolean;
+      edit?: boolean;
+      message?: string;
+    },
+  ): void {
+    const entry = this.jobMarks.get(deliveryId) ?? { held: false, edit: false, changeOwed: false, releaseOwed: false };
+    if (mark.held !== undefined) {
+      if (entry.held && !mark.held) entry.releaseOwed = true;
+      entry.held = mark.held;
+    }
+    if (mark.edit !== undefined) entry.edit = mark.edit;
+    if (mark.message !== undefined) entry.message = mark.message;
+    if ('change' in mark) {
+      entry.change = mark.change;
+      entry.changeOwed = true;
+    }
+    if (mark.lost) {
+      entry.lost = mark.lost;
+      entry.changeOwed = true;
+    }
+    this.jobMarks.set(deliveryId, entry);
+    if (!this.jobMarkRenewal) {
+      this.jobMarkRenewal = setInterval(() => void this.writeJobMarks(), JOB_HOLD_RENEW_MS);
+      this.jobMarkRenewal.unref?.();
+    }
+    void this.writeJobMarks();
+  }
+
+  /**
+   * Write what the jobs must say, one pass at a time: the copy's state into the job, and a held job's lease as a key
+   * Redis expires itself, renewed each time (a released one is removed). A write Redis did not take is tried again at
+   * the next renewal. A job gone or settled needs nothing more. A job already active elsewhere takes the mark from its
+   * next attempt; the one under way goes out as it is.
+   */
+  private writeJobMarks(): Promise<void> {
+    if (this.markingJobs) {
+      this.markJobsAgain = true;
+      return this.markingJobs;
+    }
+    this.markingJobs = (async () => {
+      do {
+        this.markJobsAgain = false;
+        for (const [deliveryId, entry] of [...this.jobMarks]) {
+          if (!entry.held && !entry.changeOwed && !entry.releaseOwed) {
+            this.jobMarks.delete(deliveryId);
+            continue;
+          }
+          try {
+            const queue = this.webhookQueue!;
+            await producerReady(queue);
+            const redis = await queue.getBackend().client;
+            const lease = jobHoldKey(queue, deliveryId);
+            const job = await queue.getJob(deliveryId);
+            const state = job ? await job.getState() : undefined;
+            if (!job || state === 'completed' || state === 'failed') {
+              if (entry.held || entry.releaseOwed) await redis.del(lease);
+              this.jobMarks.delete(deliveryId);
+              continue;
+            }
+            if (entry.changeOwed) {
+              await job.updateData({
+                ...job.data,
+                ...('change' in entry ? { unwrittenChange: entry.change } : {}),
+                ...(entry.lost ? { unwrittenLost: entry.lost } : {}),
+              });
+              entry.changeOwed = false;
+            }
+            if (entry.held) await redis.set(lease, '1', { PX: JOB_HOLD_LEASE_MS });
+            else if (entry.releaseOwed) {
+              await redis.del(lease);
+              entry.releaseOwed = false;
+            }
+            if (!entry.held && !entry.changeOwed && !entry.releaseOwed) this.jobMarks.delete(deliveryId);
+          } catch (error) {
+            this.warnJobMark(deliveryId, error);
+          }
+        }
+      } while (this.markJobsAgain);
+    })().finally(() => {
+      this.markingJobs = undefined;
+      if (this.jobMarks.size === 0) {
+        clearInterval(this.jobMarkRenewal);
+        this.jobMarkRenewal = undefined;
+      }
+    });
+    return this.markingJobs;
+  }
+
+  private warnJobMark(deliveryId: string, error: unknown): void {
+    const now = Date.now();
+    this.jobMarkWarning.held++;
+    if (now - this.jobMarkWarning.at < WARN_JOB_MARK_EVERY_MS) return;
+    this.logger.warn('Could not write what a queued job with no outbox row must say; trying again', {
+      deliveryId,
+      error: error instanceof Error ? error.message : String(error),
+      failures: this.jobMarkWarning.held,
+      action: 'webhook_job_mark_failed',
+    });
+    this.jobMarkWarning.at = now;
+    this.jobMarkWarning.held = 0;
+  }
+
+  private async dropOrphanCopies(): Promise<void> {
+    if (this.checkingOrphans) return;
+    this.checkingOrphans = true;
+    try {
+      await this.dropOrphanCopiesNow();
+    } finally {
+      this.checkingOrphans = false;
+    }
+  }
+
+  private async dropOrphanCopiesNow(): Promise<void> {
+    for (const { webhookId, idempotencyKey, deliveryId } of this.outbox.queuedCopies()) {
+      if (!(await this.jobGone(deliveryId))) continue;
+      this.outbox.forgetUnwritten(webhookId, idempotencyKey);
+      this.logger.warn('Dropping a kept copy of a delivery whose queued job is gone', {
+        webhookId,
+        idempotencyKey,
+        deliveryId,
+        action: 'recovery_journal_orphan',
+      });
+    }
+  }
+
+  /** Whether a queued job is gone for good; false when the queue cannot tell now. */
+  private async jobGone(deliveryId: string): Promise<boolean> {
+    if (!this.queueEnabled || !this.webhookQueue) return true;
+    try {
+      const job = await this.webhookQueue.getJob(deliveryId);
+      if (!job) return true;
+      const state = await job.getState();
+      return state === 'completed' || state === 'failed';
+    } catch {
+      return false;
+    }
+  }
+
+  /** The queue of what the database refused, shared with the message projector (see `recovery`). */
+  recoveryQueue(): RecoveryQueue {
+    return this.recovery;
+  }
+
+  /** Tell kept state events of a session this node no longer owns from the rest (see SESSION_STATE_EVENTS). */
+  setSessionOwnership(owns: (sessionId: string) => boolean): void {
+    this.ownsSession = owns;
   }
 
   onModuleInit(): void {
@@ -318,6 +699,16 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * so the bound limits this hook only; the whole teardown is the sum in shutdown-budget.ts.
    */
   async onModuleDestroy(): Promise<void> {
+    clearInterval(this.orphanCheck);
+    clearInterval(this.jobMarkRenewal);
+    const drainBudgetMs = Math.max(
+      0,
+      this.configService.get<number>('webhook.shutdownDrainMs', DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS),
+    );
+    // One pass over the dispatches the database refused, before the limiter closes: an event the database takes now
+    // gets its outbox row (the next start replays one this drain cannot deliver), and the loss of the rest is logged.
+    const drainStarted = Date.now();
+    await this.recovery.drain(drainBudgetMs, ['dispatch']);
     this.shutdownAbort.abort();
     // Opt-in events still waiting for their stage hold nothing durable (no outbox row yet) and are best effort,
     // so they are let go in both modes; the ones already running finish with the rest.
@@ -327,11 +718,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     if (!this.queueEnabled) {
       this.dispatchLimiter.close();
     }
-    const drainMs = Math.max(
-      0,
-      this.configService.get<number>('webhook.shutdownDrainMs', DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS),
-    );
-    const deadline = Date.now() + drainMs;
+    const deadline = drainStarted + drainBudgetMs;
     while (
       this.dispatchLimiter.activeCount > 0 ||
       this.inFlightDeliveries.size > 0 ||
@@ -351,8 +738,14 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     this.inFlightDeliveries.clear();
   }
 
-  async dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
-    if (!WILDCARD_EXCLUDED_EVENTS.includes(event)) return this.fanOut(sessionId, event, data, null);
+  /** `engineRef`: what the engine reported of the message the event carries, when a handler filed it elsewhere. */
+  async dispatch(
+    sessionId: string,
+    event: string,
+    data: Record<string, unknown>,
+    options?: { engineRef?: MessageEngineRef | null },
+  ): Promise<void> {
+    if (!WILDCARD_EXCLUDED_EVENTS.includes(event)) return this.fanOut(sessionId, event, data, null, options?.engineRef);
     // An opt-in event fires per recipient (about 2,000 per message to a 1,000-member group): skip it
     // before the per-dispatch webhook read when no active webhook of the session names it.
     const webhookIds = await this.webhooksNamingOptInEvent(sessionId, event);
@@ -456,9 +849,20 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     event: string,
     data: Record<string, unknown>,
     only: string | null = null,
-    options?: { throwOnLookupError?: boolean },
+    options?: {
+      throwOnLookupError?: boolean;
+      /** Told when the webhooks could not be read, which otherwise reads as none. */
+      onLookupError?: () => void;
+      engineRef?: MessageEngineRef | null;
+      occurrenceId?: string;
+    },
   ): Promise<PreparedWebhookDelivery[]> {
-    const webhooks = await this.loadActiveWebhooks(sessionId, event, options?.throwOnLookupError === true);
+    const webhooks = await this.loadActiveWebhooks(
+      sessionId,
+      event,
+      options?.throwOnLookupError === true,
+      options?.onLookupError,
+    );
     const matchingWebhooks = await this.filterMatchingWebhooks(
       only === null ? webhooks : webhooks.filter(webhook => webhook.id === only),
       event,
@@ -469,7 +873,11 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     // Base idempotency key for this event occurrence. The occurrence id is minted once here and reused for
     // every retry of this dispatch, so recurring lifecycle events get a distinct-per-occurrence key (even two
     // within one clock millisecond) while retries of the same event stay stable. It is salted PER WEBHOOK below.
-    const baseIdempotencyKey = generateIdempotencyKey(event, { ...data, sessionId }, randomUUID());
+    const baseIdempotencyKey = generateIdempotencyKey(
+      event,
+      { ...data, sessionId },
+      options?.occurrenceId ?? randomUUID(),
+    );
 
     // Fan-out amplification bound: shed an over-cap inline media blob ONCE here, before the
     // per-webhook structuredClone in preflightDelivery, so N matching webhooks (and queued jobs retained
@@ -491,6 +899,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         idempotencyKey,
         deliveryId,
         payload: baseData,
+        engineRef: options?.engineRef ?? null,
       };
       return {
         webhook,
@@ -521,14 +930,23 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     const rows = prepared.map(item => item.outboxRow);
     if (typeof this.outbox.openBatch === 'function') {
       const inserted = await this.outbox.openBatch(rows, manager);
-      if (inserted === null) return null;
-      const insertedKeys = new Set(inserted.map(row => `${row.webhookId}\u0000${row.idempotencyKey}`));
-      return prepared.filter(item => {
+      const insertedKeys = new Set((inserted ?? []).map(row => `${row.webhookId}\u0000${row.idempotencyKey}`));
+      const opened = prepared.filter(item => {
         const key = `${item.webhook.id}\u0000${item.idempotencyKey}`;
         if (!insertedKeys.has(key)) return false;
         insertedKeys.delete(key);
         return true;
       });
+      // A row this dispatch did not write holds whatever its writer put there: a check before a send cannot read a
+      // change from it, only that it was closed.
+      for (const item of prepared) if (!opened.includes(item)) item.storedHash = null;
+      // No row could be written: the deliveries keep their copy in memory, which a change of the message still reaches.
+      if (inserted === null) {
+        this.outbox.holdUnwritten(rows);
+        for (const item of prepared) item.storedHash = undefined;
+        return null;
+      }
+      return opened;
     }
     if (manager) {
       throw new Error('WebhookOutboxService.openBatch is required for transactional outbox writes');
@@ -542,8 +960,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * message edit) changed the message between transaction commit and dispatch. Re-evaluates webhook
    * filters against `finalData`, closes owned outbox rows for webhooks that no longer match, updates
    * pending outbox payloads in place for webhooks that still match, and opens rows for any newly
-   * matching webhooks. On a transient webhook lookup error, committed outbox rows are never closed:
-   * their stored payloads are updated in place to `finalData` and returned for live dispatch.
+   * matching webhooks, unless `openNew` is false. On a transient webhook lookup error, committed outbox
+   * rows are never closed: their stored payloads are updated in place to `finalData` and returned for live
+   * dispatch.
    */
   async reconcilePrepared(
     committed: readonly PreparedWebhookDelivery[],
@@ -551,6 +970,8 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     event: string,
     finalData: Record<string, unknown>,
     owned?: readonly PreparedWebhookDelivery[],
+    openNew = true,
+    engineRef?: MessageEngineRef | null,
   ): Promise<PreparedWebhookDelivery[]> {
     const keyOf = (item: Pick<PreparedWebhookDelivery, 'webhook' | 'idempotencyKey'>): string =>
       `${item.webhook.id}\u0000${item.idempotencyKey}`;
@@ -559,7 +980,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
 
     let fresh: PreparedWebhookDelivery[];
     try {
-      fresh = await this.prepareDeliveries(sessionId, event, finalData, null, { throwOnLookupError: true });
+      fresh = await this.prepareDeliveries(sessionId, event, finalData, null, { throwOnLookupError: true, engineRef });
     } catch (error) {
       this.logger.warn(
         `Could not reload webhooks while reconciling ${event} for session ${sessionId}; preserving committed outbox rows`,
@@ -576,11 +997,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         outboxRow: { ...prev.outboxRow, payload: baseData },
       }));
       if (typeof this.outbox.updatePendingPayload === 'function') {
-        await Promise.all(
-          preserved
-            .filter(isOwned)
-            .map(item => this.outbox.updatePendingPayload(item.webhook.id, item.idempotencyKey, item.baseData)),
-        );
+        await Promise.all(preserved.map((item, i) => this.rewriteCommitted(item, committed[i], isOwned(committed[i]))));
       }
       return preserved;
     }
@@ -613,15 +1030,35 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     }
     if (updated.length > 0 && typeof this.outbox.updatePendingPayload === 'function') {
       await Promise.all(
-        updated
-          .filter(isOwned)
-          .map(item => this.outbox.updatePendingPayload(item.webhook.id, item.idempotencyKey, item.baseData)),
+        updated.map(item => {
+          const prev = committedByKey.get(keyOf(item))!;
+          return this.rewriteCommitted(item, prev, isOwned(prev));
+        }),
       );
     }
+    if (!openNew) return updated;
     if (added.length > 0) {
       await this.openPrepared(added);
     }
     return [...updated, ...added];
+  }
+
+  /**
+   * Rewrite a committed row this commit owns to `item`'s data, and record on `item` what the row holds after: its
+   * data, the older data when the rewrite did not land, or nothing known for a row the commit does not own (left as
+   * it was).
+   */
+  private async rewriteCommitted(
+    item: PreparedWebhookDelivery,
+    prev: PreparedWebhookDelivery,
+    owned: boolean,
+  ): Promise<void> {
+    if (!owned) {
+      item.storedHash = null;
+      return;
+    }
+    const rewritten = await this.outbox.updatePendingPayload(item.webhook.id, item.idempotencyKey, item.baseData);
+    item.storedHash = rewritten ? undefined : prev.storedHash === undefined ? dataHash(prev.baseData) : prev.storedHash;
   }
 
   /**
@@ -634,15 +1071,19 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     // allSettled preserves per-webhook isolation: one failing delivery never rejects the others.
     await Promise.allSettled(
       prepared.map(async item => {
-        const { webhook, deliveryId, idempotencyKey, sessionId, event, baseData } = item;
-        const ctx: DispatchEventContext = { sessionId, event, baseData };
+        const { webhook, deliveryId, idempotencyKey, sessionId, event, baseData, storedHash, onUnrecorded } = item;
+        const ctx: DispatchEventContext = { sessionId, event, baseData, storedHash, onUnrecorded };
         this.locallyPending.set(idempotencyKey, (this.locallyPending.get(idempotencyKey) ?? 0) + 1);
         try {
           await this.runLimited(webhook, deliveryId, idempotencyKey, ctx);
         } finally {
           const left = (this.locallyPending.get(idempotencyKey) ?? 1) - 1;
           if (left > 0) this.locallyPending.set(idempotencyKey, left);
-          else this.locallyPending.delete(idempotencyKey);
+          else {
+            this.locallyPending.delete(idempotencyKey);
+            // Every way a direct delivery ends lands here: nothing reads its copy after it, a queued job's aside.
+            this.outbox.forgetUnqueued(webhook.id, idempotencyKey);
+          }
         }
       }),
     );
@@ -657,26 +1098,132 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     await Promise.all(prepared.map(item => this.outbox.close(item.webhook.id, item.idempotencyKey, 'dispatched')));
   }
 
-  /** Close any still-pending message outbox rows when an engine revoke arrives for a message. */
-  async closePendingForMessage(
+  /**
+   * Close any still-open message outbox rows when an engine revoke arrives for a message, and drop the event data
+   * its failed deliveries keep for a redrive.
+   */
+  closePendingForMessage(sessionId: string, waMessageId: string, shouldApply?: MessageCopyPredicate): Promise<void> {
+    return this.changeCopiesQuietly(sessionId, waMessageId, { kind: 'close' }, shouldApply);
+  }
+
+  /**
+   * Redact payloads on any still-open message outbox rows when a REST delete clears a message, and the event data
+   * its failed deliveries keep for a redrive.
+   */
+  redactPendingForMessage(sessionId: string, waMessageId: string, shouldApply?: MessageCopyPredicate): Promise<void> {
+    return this.changeCopiesQuietly(sessionId, waMessageId, { kind: 'redact' }, shouldApply);
+  }
+
+  /** Write an edit of a stored message into its open outbox rows and the event data its failed deliveries keep. */
+  rewritePendingForMessage(
     sessionId: string,
     waMessageId: string,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    body: string,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
-    if (typeof this.outbox.closePendingForMessage === 'function') {
-      await this.outbox.closePendingForMessage(sessionId, waMessageId, shouldApply);
+    return this.changeCopiesQuietly(sessionId, waMessageId, { kind: 'rewrite', body }, shouldApply);
+  }
+
+  /**
+   * Apply a change of a message to every copy its deliveries hold: its open outbox rows, and the event data its failed
+   * deliveries keep for a redrive (dropped on a close), each judged by `shouldApply` on its payload, so neither the
+   * sweep, a queued job nor a redrive sends what the sender took back. Throws when the database fails, for a caller that
+   * keeps the change to try again.
+   */
+  async changeMessageCopies(
+    sessionId: string,
+    waMessageId: string,
+    change: MessageCopyChange,
+    shouldApply?: MessageCopyPredicate,
+  ): Promise<void> {
+    if (!waMessageId) return;
+    // A rewrite (an edit) can change what a webhook's filters read: a copy they no longer take is closed or dropped.
+    const passes = change.kind === 'rewrite' ? this.webhookStillTakes() : undefined;
+    // First what is held in memory: the events kept from a database that refused them, and the copies of deliveries
+    // whose outbox rows could not be written. Neither needs the database to change.
+    await this.changeKeptDispatches(sessionId, waMessageId, change, shouldApply);
+    await this.outbox.changeUnwrittenForMessage(sessionId, waMessageId, change, shouldApply, passes);
+    await this.outbox.changeOpenForMessage(sessionId, waMessageId, change, shouldApply, passes);
+    const { pattern, keyFor } = messageDeliveryKeys(sessionId, waMessageId);
+    const rows = await this.failureRepository
+      .createQueryBuilder('f')
+      .select(['f.id', 'f.webhookId', 'f.idempotencyKey', 'f.event'])
+      .addSelect('f.payload')
+      .where('f.sessionId = :sessionId', { sessionId })
+      .andWhere('f.event IN (:...events)', { events: MESSAGE_DELIVERY_EVENTS })
+      .andWhere('f.payload IS NOT NULL')
+      .andWhere("f.idempotencyKey LIKE :pattern ESCAPE '\\'", { pattern })
+      .getMany();
+    const kept = rows.filter(row => row.payload && row.idempotencyKey === keyFor(row.webhookId));
+    const engineRefs =
+      shouldApply && kept.length ? await this.outbox.engineRefsFor(kept) : new Map<string, MessageEngineRef>();
+    for (const row of kept) {
+      if (!row.payload) continue;
+      const engineRef = engineRefs.get(`${row.webhookId}\u0000${row.idempotencyKey}`);
+      if (shouldApply && !(await shouldApply(row.payload, engineRef))) continue;
+      const payload = changedMessagePayload(row.payload, change);
+      await this.failureRepository.update({ id: row.id }, {
+        payload: payload && passes && !(await passes(row, payload)) ? null : payload,
+      } as QueryDeepPartialEntity<WebhookDeliveryFailure>);
+    }
+    if (change.kind !== 'rewrite') await this.dropKeptEditCopies(sessionId, waMessageId, shouldApply);
+  }
+
+  /**
+   * A message taken back takes the copies its failed message.edited deliveries keep with it (see the outbox's
+   * closeOpenEditsForMessage): a redrive sends none of them.
+   */
+  private async dropKeptEditCopies(
+    sessionId: string,
+    waMessageId: string,
+    shouldApply?: MessageCopyPredicate,
+  ): Promise<void> {
+    const rows = await this.failureRepository
+      .createQueryBuilder('f')
+      .select(['f.id', 'f.webhookId', 'f.idempotencyKey'])
+      .addSelect('f.payload')
+      .where('f.sessionId = :sessionId', { sessionId })
+      .andWhere('f.event IN (:...events)', { events: MESSAGE_CHANGE_EVENTS })
+      .andWhere('f.payload IS NOT NULL')
+      .andWhere("f.idempotencyKey LIKE :pattern ESCAPE '\\'", { pattern: messageEditKeys(sessionId, waMessageId) })
+      .getMany();
+    const kept = rows.filter(row => row.payload?.messageId === waMessageId);
+    const engineRefs =
+      shouldApply && kept.length ? await this.outbox.engineRefsFor(kept) : new Map<string, MessageEngineRef>();
+    for (const row of kept) {
+      const engineRef = engineRefs.get(`${row.webhookId}\u0000${row.idempotencyKey}`);
+      if (shouldApply && !(await shouldApply(row.payload!, engineRef))) continue;
+      await this.failureRepository.update(
+        { id: row.id },
+        {
+          payload: null,
+        },
+      );
     }
   }
 
-  /** Redact payloads on any still-pending message outbox rows when a REST delete clears a message. */
-  async redactPendingForMessage(
+  /** Whether a delivery's webhook, read once per change, still takes a rewritten copy: its subscription and filters. */
+  private webhookStillTakes(): MessageCopyFilter {
+    const webhooks = new Map<string, Promise<Webhook | null>>();
+    return async ({ webhookId, event }, payload) => {
+      if (!webhooks.has(webhookId))
+        webhooks.set(webhookId, this.webhookRepository.findOne({ where: { id: webhookId } }));
+      const webhook = await webhooks.get(webhookId)!;
+      // A webhook removed since takes nothing more anyway: its deliveries are skipped when they are tried.
+      return !webhook || (await this.filterMatchingWebhooks([webhook], event, payload)).length > 0;
+    };
+  }
+
+  /** {@link changeMessageCopies}, best-effort: a failure is logged. */
+  private changeCopiesQuietly(
     sessionId: string,
     waMessageId: string,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    change: MessageCopyChange,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
-    if (typeof this.outbox.redactPendingForMessage === 'function') {
-      await this.outbox.redactPendingForMessage(sessionId, waMessageId, shouldApply);
-    }
+    return this.changeMessageCopies(sessionId, waMessageId, change, shouldApply).catch((error: unknown) =>
+      this.logger.warn(`Could not change the delivery copies of message ${waMessageId}: ${String(error)}`),
+    );
   }
 
   /**
@@ -688,8 +1235,28 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     event: string,
     data: Record<string, unknown>,
     only: string | null,
+    engineRef?: MessageEngineRef | null,
   ): Promise<void> {
-    const prepared = await this.prepareDeliveries(sessionId, event, data, only);
+    const kept = !UNKEPT_EVENTS.includes(event);
+    // While the session has events kept from a database that refused them, a new one goes after them, in order.
+    if (kept && this.parkedDispatches.get(sessionId)?.size) {
+      this.keepDispatch(sessionId, event, data, only, engineRef ?? null, randomUUID());
+      return;
+    }
+    // Minted once, so a dispatch tried again once the database answers sends the same key.
+    const occurrenceId = randomUUID();
+    let lookupFailed = false;
+    const prepared = await this.prepareDeliveries(sessionId, event, data, only, {
+      engineRef,
+      occurrenceId,
+      onLookupError: () => (lookupFailed = true),
+    });
+    // The webhooks could not be read (logged by the lookup): nothing is sent and nothing durable exists yet.
+    if (lookupFailed) {
+      if (kept) this.keepDispatch(sessionId, event, data, only, engineRef ?? null, occurrenceId);
+      else this.noteUnkept(sessionId, event);
+      return;
+    }
     // The awaits below hold this frame, parameters included, until every delivery settles: point
     // `data` at the shed copy so parked deliveries pin only that, not the caller's full blob.
     // eslint-disable-next-line no-useless-assignment
@@ -698,8 +1265,130 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     // Record best-effort replay rows without filtering dispatch on outbox conflicts: webhook_outbox_events
     // retains settled rows for 7 days, Note-to-Self message.received/message.sent share one key, and
     // recurring events (session.qr, message.ack, call.*, poll.vote) legitimately repeat within that window.
-    await this.openPrepared(prepared);
+    const opened = await this.openPrepared(prepared);
+    // No outbox row could be written: the delivery still goes out now, and one that then leaves no durable record of
+    // its failure either is kept for its webhook, under the same key, until the database answers.
+    if (opened === null && kept) {
+      for (const item of prepared) {
+        item.onUnrecorded = () => {
+          // As a change of the message left it; nothing once it was taken back.
+          const copy = this.outbox.unwrittenCopy(item.webhook.id, item.idempotencyKey);
+          this.outbox.forgetUnwritten(item.webhook.id, item.idempotencyKey);
+          if (copy === null) return;
+          this.keepDispatch(sessionId, event, copy ?? item.baseData, item.webhook.id, engineRef ?? null, occurrenceId);
+        };
+      }
+    }
     await this.dispatchPrepared(prepared);
+  }
+
+  /** Keep an event whose dispatch the database refused, with its inline media shed (see ParkedDispatch). */
+  private keepDispatch(
+    sessionId: string,
+    event: string,
+    data: Record<string, unknown>,
+    only: string | null,
+    engineRef: MessageEngineRef | null,
+    occurrenceId: string,
+  ): void {
+    const parked = new ParkedDispatch(
+      `${sessionId}#${++this.parkSeq}`,
+      sessionId,
+      event,
+      shedInlineMedia(
+        data,
+        this.configService.get<number>('webhook.mediaInlineMaxBytes', DEFAULT_WEBHOOK_MEDIA_INLINE_MAX_BYTES),
+      ),
+      occurrenceId,
+      engineRef,
+      only,
+      Date.now(),
+      this.parkSteps,
+    );
+    let session = this.parkedDispatches.get(sessionId);
+    if (!session) {
+      this.parkedDispatches.set(sessionId, (session = new Set()));
+      this.logger.warn('Keeping the webhook events the database refused, to dispatch them once it answers', {
+        sessionId,
+        event,
+        action: 'webhook_dispatch_parked',
+      });
+    }
+    session.add(parked);
+    this.recovery.park(parked.key, parked);
+  }
+
+  /** Dispatch a kept event: its webhooks read again, its outbox rows opened, then its deliveries started. */
+  private async dispatchKept(parked: ParkedDispatch): Promise<void> {
+    const { sessionId, event, data, only, engineRef, occurrenceId } = parked;
+    if (SESSION_STATE_EVENTS.includes(event) && this.ownsSession && !this.ownsSession(sessionId)) {
+      this.noteDropped(sessionId, event, 'ownership');
+      return;
+    }
+    const prepared = await this.prepareDeliveries(sessionId, event, data, only, {
+      engineRef,
+      occurrenceId,
+      throwOnLookupError: true,
+    });
+    // Written through the repository's manager so a failure throws, and the event stays kept.
+    if ((await this.openPrepared(prepared, this.webhookRepository.manager)) === null) {
+      // The event stays kept, and no delivery runs for the copies this attempt held.
+      for (const item of prepared) this.outbox.forgetUnwritten(item.webhook.id, item.idempotencyKey);
+      throw new Error('The outbox rows of a kept webhook event could not be written');
+    }
+    void this.dispatchPrepared(prepared);
+  }
+
+  /** A kept event left the queue: a loss is logged and counted as a delivery that failed. */
+  private releaseKept(parked: ParkedDispatch, reason?: RecoveryLoss): void {
+    const session = this.parkedDispatches.get(parked.sessionId);
+    session?.delete(parked);
+    if (session?.size === 0) this.parkedDispatches.delete(parked.sessionId);
+    if (reason) this.noteDropped(parked.sessionId, parked.event, reason);
+  }
+
+  private noteUnkept(sessionId: string, event: string): void {
+    this.noteDropped(sessionId, event, 'not kept');
+  }
+
+  private noteDropped(sessionId: string, event: string, reason: RecoveryLoss | 'not kept' | 'ownership'): void {
+    const meta = { sessionId, event, reason, action: 'webhook_dispatch_dropped' };
+    // Another node announces its own engine's state: nothing a receiver needed is lost.
+    if (reason === 'ownership') {
+      this.logger.warn('Dropping a kept state event of a session this node no longer owns', meta);
+      return;
+    }
+    incrementWebhookDeliveryFailures();
+    this.logger.error('A webhook event the database refused was dropped', undefined, meta);
+  }
+
+  /**
+   * The copies a kept event of the message holds take a change as an outbox copy does: judged by the engine's chat
+   * when a handler filed the message elsewhere, else by the payload; a close withdraws the event. Its webhooks' filters
+   * are read when it is dispatched.
+   */
+  private async changeKeptDispatches(
+    sessionId: string,
+    waMessageId: string,
+    change: MessageCopyChange,
+    shouldApply?: MessageCopyPredicate,
+  ): Promise<void> {
+    for (const parked of [...(this.parkedDispatches.get(sessionId) ?? [])]) {
+      // A message taken back takes its kept edit events with it; an edit leaves them, each its own occurrence.
+      const edit = MESSAGE_CHANGE_EVENTS.includes(parked.event) && parked.data.messageId === waMessageId;
+      if (!(edit && change.kind !== 'rewrite')) {
+        if (!MESSAGE_DELIVERY_EVENTS.includes(parked.event) || parked.data.id !== waMessageId) continue;
+      }
+      if (shouldApply && !(await shouldApply(parked.data, parked.engineRef))) continue;
+      const data = edit ? null : changedMessagePayload(parked.data, change);
+      if (!data) {
+        this.recovery.settle('dispatch', parked.key);
+        continue;
+      }
+      parked.data = data;
+      parked.measure();
+      this.recovery.remeasure('dispatch', parked.key);
+    }
   }
 
   /**
@@ -763,7 +1452,12 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * swallowed by default to avoid unhandled rejections. Transactional callers pass
    * `throwOnError = true` so a transient DB lookup fault is never mistaken for "0 matching webhooks".
    */
-  private async loadActiveWebhooks(sessionId: string, event: string, throwOnError = false): Promise<Webhook[]> {
+  private async loadActiveWebhooks(
+    sessionId: string,
+    event: string,
+    throwOnError = false,
+    onError?: () => void,
+  ): Promise<Webhook[]> {
     try {
       return await this.webhookRepository.find({
         where: { sessionId, active: true },
@@ -774,6 +1468,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         action: 'webhook_dispatch_lookup_failed',
       });
       if (throwOnError) throw error;
+      onError?.();
       return [];
     }
   }
@@ -837,205 +1532,6 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     return matching;
   }
 
-  private async recordUndelivered(
-    webhook: Webhook,
-    deliveryId: string,
-    idempotencyKey: string,
-    error: unknown,
-    action: string,
-    ctx: DispatchEventContext,
-  ): Promise<boolean> {
-    const { sessionId, event } = ctx;
-    const lastError = redactSsrfError(error, this.logger, 'webhook dispatch');
-    const recorded = await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
-      webhookId: webhook.id,
-      sessionId,
-      event,
-      url: webhook.url,
-      idempotencyKey,
-      deliveryId,
-      attempts: 0,
-      lastStatusCode: null,
-      lastError,
-    });
-    if (recorded !== false) incrementWebhookDeliveryFailures();
-    try {
-      await this.hookManager.execute(
-        'webhook:error',
-        { sessionId, event, webhookId: webhook.id, deliveryId, error: lastError },
-        { sessionId, source: 'WebhookService' },
-      );
-    } catch (hookError) {
-      this.logger.error('webhook:error hook failed while reporting an undelivered webhook', String(hookError), {
-        webhookId: webhook.id,
-        deliveryId,
-        action: 'webhook_error_hook_failed',
-      });
-    }
-    this.logger.error(`Webhook ${webhook.id} was not dispatched`, lastError, {
-      webhookId: webhook.id,
-      deliveryId,
-      action,
-    });
-    return recorded !== null;
-  }
-
-  private isPreEgressFailClosed(): boolean {
-    if (typeof this.hookManager.isPreEgressFailClosed === 'function') {
-      return this.hookManager.isPreEgressFailClosed();
-    }
-    const configured = this.configService.get<boolean | string>('hooks.preEgressFailClosed');
-    if (typeof configured === 'boolean') return configured;
-    if (typeof configured === 'string') return configured.trim().toLowerCase() === 'true';
-    return process.env.HOOK_PRE_EGRESS_FAIL_CLOSED?.trim().toLowerCase() === 'true';
-  }
-
-  /**
-   * Build one webhook delivery: payload + webhook:before hooks + identity re-assertion + size gate.
-   * Returns null when the delivery must not proceed: either cancelled by a plugin (a debug
-   * log, not a failure) or after a failure already recorded via recordUndelivered.
-   */
-  private async preflightDelivery(
-    webhook: Webhook,
-    deliveryId: string,
-    idempotencyKey: string,
-    ctx: DispatchEventContext,
-  ): Promise<{ finalPayload: WebhookPayload; body: string } | 'cancelled' | 'unrecorded' | null> {
-    const { sessionId, event, baseData } = ctx;
-    try {
-      const payload: WebhookPayload = {
-        event,
-        timestamp: new Date().toISOString(),
-        sessionId,
-        idempotencyKey,
-        deliveryId,
-        // Give each webhook its own copy of the event data: a webhook:before hook that mutates
-        // payload.data in place would otherwise bleed that change into sibling webhooks.
-        data: structuredClone(baseData),
-      };
-      // Captured BEFORE the hook chain: a hook may return the same payload object mutated in
-      // place, so reading the canonical timestamp off the hook result afterwards is not safe.
-      const payloadTimestamp = payload.timestamp;
-
-      // A handler result without a plain-object payload is skipped, so the chain keeps the last usable
-      // payload (an earlier hook's redaction included) rather than the one it started from.
-      const { continue: shouldContinue, data: hookResult } = await this.hookManager.execute(
-        'webhook:before',
-        { sessionId, event, payload },
-        {
-          sessionId,
-          source: 'WebhookService',
-          accept: isWebhookBeforeResult,
-        },
-      );
-
-      if (!shouldContinue) {
-        this.logger.debug(`Webhook dispatch cancelled by plugin for ${event}`, {
-          webhookId: webhook.id,
-          action: 'webhook_cancelled_by_plugin',
-        });
-        return 'cancelled';
-      }
-
-      // In fail-closed mode, require a plain-object hookResult carrying an own plain-object `payload`
-      // without falling back to the unmoderated original payload via `?? payload`.
-      // In fail-open mode, null/undefined or non-object payloads fall back to the original and warn.
-      let finalPayload: WebhookPayload;
-      if (this.isPreEgressFailClosed()) {
-        const hasOwnPayload = isPlainObject(hookResult) && Object.prototype.hasOwnProperty.call(hookResult, 'payload');
-        const candidatePayload = hasOwnPayload ? (hookResult as { payload?: unknown }).payload : undefined;
-        if (!hasOwnPayload || !isPlainObject(candidatePayload)) {
-          const received = !isPlainObject(hookResult)
-            ? Array.isArray(hookResult)
-              ? 'array'
-              : hookResult === null
-                ? 'null'
-                : typeof hookResult
-            : !hasOwnPayload
-              ? 'missing payload'
-              : Array.isArray(candidatePayload)
-                ? 'array payload'
-                : candidatePayload === null
-                  ? 'null payload'
-                  : `${typeof candidatePayload} payload`;
-          throw new Error(
-            `A webhook:before hook returned an unusable payload (${received}) while fail-closed mode is enabled`,
-          );
-        }
-        finalPayload = candidatePayload as unknown as WebhookPayload;
-      } else {
-        const hookPayload = (hookResult as { payload?: unknown } | null | undefined)?.payload ?? payload;
-        const usable = isPlainObject(hookPayload);
-        if (!usable) {
-          this.logger.warn('A webhook:before hook returned a payload that is not an object; sending the original', {
-            webhookId: webhook.id,
-            event,
-            received: Array.isArray(hookPayload) ? 'array' : typeof hookPayload,
-            action: 'hook_payload_discarded',
-          });
-        }
-        finalPayload = usable ? (hookPayload as unknown as WebhookPayload) : payload;
-      }
-      // Re-assert EVERY identity field after the (untrusted) hook chain. A hook may rewrite data,
-      // but event/sessionId/timestamp and the dedupe ids must remain the server's values: the
-      // receiver verifies the signature over this body and compares it against the X-OpenWA-*
-      // headers, and failure records are filed by these fields — a rewritten sessionId/event
-      // misfiles them across sessions.
-      finalPayload.event = event;
-      finalPayload.sessionId = sessionId;
-      finalPayload.timestamp = payloadTimestamp;
-      finalPayload.idempotencyKey = idempotencyKey;
-      finalPayload.deliveryId = deliveryId;
-
-      // Bound what a hook mutation can make us send. Serializing here also catches a poisoned
-      // (BigInt/circular) hook result as a preflight failure, on BOTH the queued and direct paths.
-      // The bytes are serialized ONCE and reused for the size gate, the HMAC signature, and the
-      // direct-delivery body (BullMQ re-serializes jobData itself — unavoidable).
-      const maxPayloadBytes = this.configService.get<number>(
-        'webhook.maxPayloadBytes',
-        DEFAULT_WEBHOOK_MAX_PAYLOAD_BYTES,
-      );
-      let body = JSON.stringify(finalPayload);
-      let payloadBytes = Buffer.byteLength(body, 'utf8');
-      if (payloadBytes > maxPayloadBytes) {
-        // Size-gated body shedding: over budget, strip ANY remaining inline media blob (threshold
-        // 0 — the marker form keeps the event deliverable) and re-check, instead of dropping the
-        // event or queueing a giant payload.
-        const shedData = shedInlineMedia(finalPayload.data, 0);
-        if (shedData !== finalPayload.data) {
-          finalPayload.data = shedData;
-          body = JSON.stringify(finalPayload);
-          payloadBytes = Buffer.byteLength(body, 'utf8');
-        }
-      }
-      if (payloadBytes > maxPayloadBytes) {
-        const recorded = await this.recordUndelivered(
-          webhook,
-          deliveryId,
-          idempotencyKey,
-          new Error(
-            `Webhook payload is ${payloadBytes} bytes after webhook:before hooks, exceeding the ${maxPayloadBytes}-byte cap`,
-          ),
-          'webhook_payload_oversize',
-          ctx,
-        );
-        return recorded ? null : 'unrecorded';
-      }
-
-      return { finalPayload, body };
-    } catch (error) {
-      const recorded = await this.recordUndelivered(
-        webhook,
-        deliveryId,
-        idempotencyKey,
-        error,
-        'webhook_dispatch_preflight_failed',
-        ctx,
-      );
-      return recorded ? null : 'unrecorded';
-    }
-  }
-
   /**
    * What became of one delivery attempt, reported rather than thrown.
    *
@@ -1055,7 +1551,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     idempotencyKey: string,
     ctx: DispatchEventContext,
   ): Promise<WebhookDeliveryOutcome> {
-    const preflight = await this.preflightDelivery(webhook, deliveryId, idempotencyKey, ctx);
+    const preflight = await this.preflight.preflightDelivery(webhook, deliveryId, idempotencyKey, ctx);
     if (preflight === 'unrecorded') return 'unrecorded';
     if (preflight === 'cancelled') {
       // A plugin suppressed this dispatch deliberately. There is no failure to record and nothing
@@ -1100,6 +1596,14 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         attempt: 1,
         maxRetries: webhook.retryCount,
         ...(this.keepsFailurePayload() ? { replayData: ctx.baseData } : {}),
+        ...this.heldHash(ctx),
+        ...(MESSAGE_CHANGE_EVENTS.includes(event) && typeof ctx.baseData.messageId === 'string'
+          ? { messageId: ctx.baseData.messageId }
+          : {}),
+        ...((MESSAGE_DELIVERY_EVENTS.includes(event) || MESSAGE_CHANGE_EVENTS.includes(event)) &&
+        this.outbox.hasUnwritten(webhook.id, idempotencyKey)
+          ? { unwritten: ctx.baseData }
+          : {}),
       };
 
       await producerReady(this.webhookQueue!);
@@ -1119,6 +1623,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           delay: this.configService.get<number>('webhook.retryDelay', 5000),
         },
       });
+
+      // The job outlives the process; a copy kept for it, with no outbox row, goes into the journal with it, and the job
+      // is held at once when a change of its message is kept already.
+      const queued = this.outbox.queuedUnwritten(webhook.id, idempotencyKey, deliveryId);
+      if (queued?.messageId) {
+        this.holdJobs(queued.sessionId, queued.messageId, this.outbox.messageHold(queued.sessionId, queued.messageId));
+      }
 
       // Execute hook after successful queue (NOT delivery - that happens in processor)
       await this.hookManager.execute(
@@ -1208,6 +1719,12 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     return 'enqueued';
   }
 
+  /** The hash of what the delivery's outbox row holds, for the worker's check; none when it is not known. */
+  private heldHash(ctx: DispatchEventContext): { baseHash?: string } {
+    const baseHash = ctx.storedHash === undefined ? dataHash(ctx.baseData) : ctx.storedHash;
+    return baseHash ? { baseHash } : {};
+  }
+
   /** Direct delivery when the queue is disabled. */
   private async deliverDirect(
     webhook: Webhook,
@@ -1263,6 +1780,43 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   /** True while a dispatch on this node still owns the outbox row for this key. */
   isLocallyPending(idempotencyKey: string): boolean {
     return this.locallyPending.has(idempotencyKey);
+  }
+
+  /** See WebhookOutboxService.holdMessage. */
+  holdMessage(sessionId: string, waMessageId: string, held: MessageHold | false): void {
+    this.outbox.holdMessage(sessionId, waMessageId, held);
+    // The jobs this node queued with no outbox row are held for a worker of another node too, as a renewed lease.
+    if (this.queueEnabled && this.webhookQueue) this.holdJobs(sessionId, waMessageId, held);
+  }
+
+  /**
+   * Hold the jobs of the message this node queued with no outbox row as its own hold holds their copies: a message
+   * delivery while any change of it is kept, an edit event only while a revoke is. Only a change of what a job must
+   * say is written; a lease is let go by the message, so one whose copy this node dropped since is let go too.
+   */
+  private holdJobs(sessionId: string, waMessageId: string, hold: MessageHold | false | undefined): void {
+    const message = `${sessionId}\u0000${waMessageId}`;
+    const holds = (edit: boolean): boolean => (edit ? hold === 'revoke' : Boolean(hold));
+    const queued = this.outbox.queuedCopiesOf(sessionId, waMessageId);
+    for (const [deliveryId, edit] of queued) {
+      if ((this.jobMarks.get(deliveryId)?.held ?? false) !== holds(edit)) {
+        this.markJob(deliveryId, { held: holds(edit), edit, message });
+      }
+    }
+    for (const [deliveryId, entry] of this.jobMarks) {
+      if (entry.message === message && entry.held && !holds(entry.edit) && !queued.some(([id]) => id === deliveryId)) {
+        this.markJob(deliveryId, { held: false });
+      }
+    }
+  }
+
+  /** See WebhookOutboxService.isMessageHeld. */
+  isMessageHeld(
+    idempotencyKey: string,
+    webhookId: string,
+    delivery?: { sessionId: string; event: string; data?: Record<string, unknown> | null },
+  ): boolean {
+    return this.outbox.isMessageHeld(idempotencyKey, webhookId, delivery);
   }
 
   /**
@@ -1328,10 +1882,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     // session gates or the sleepers, so on its own it no longer bounds what sits in heap.
     const overBudget =
       this.inFlightDeliveries.size + this.parkedDeliveries() >= this.dispatchLimiter.maxCount + this.dispatchMaxQueued;
+    // A free slot starts the task in this very call; one that waited for its slot may find its message changed since.
+    let parked = false;
     const admitted = overBudget
       ? Promise.reject(new Error('ConcurrencyLimiter queue full'))
       : this.gateFailingReceiver(webhook, sessionId, gated =>
           this.dispatchLimiter.run(async yieldSlot => {
+            const waited = parked;
             let target = webhook;
             if (gated) {
               // A delivery can sit behind the session gate far longer than the dispatch took, and the
@@ -1374,21 +1931,46 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
               url: target.url,
             });
             try {
-              const outcome = await this.deliverOne(target, deliveryId, idempotencyKey, { ...ctx, yieldSlot });
+              let occurrence = ctx;
+              if (waited) {
+                let changed = await this.messageChange(webhook.id, idempotencyKey, ctx);
+                // A change of the message kept on this node may withdraw or rewrite it: wait for it, without the slot.
+                while (
+                  changed !== null &&
+                  this.isMessageHeld(idempotencyKey, webhook.id, { ...ctx, data: ctx.baseData })
+                ) {
+                  const delay = this.configService.get<number>('webhook.retryDelay', 5000);
+                  await yieldSlot(() => setTimeout(delay, undefined, { signal: this.shutdownAbort.signal }));
+                  changed = await this.messageChange(webhook.id, idempotencyKey, ctx);
+                }
+                if (changed === null) {
+                  this.logSkippedRetracted(webhook.id, event, deliveryId, idempotencyKey);
+                  // The delivery ends here: a copy kept for it in memory has nothing left to answer.
+                  this.outbox.forgetUnwritten(webhook.id, idempotencyKey);
+                  return;
+                }
+                if (changed === 'lost') occurrence = { ...ctx, copyLost: true };
+                else if (changed && changed !== 'unread') {
+                  occurrence = { ...ctx, baseData: changed, storedHash: undefined };
+                }
+              }
+              const outcome = await this.deliverOne(target, deliveryId, idempotencyKey, { ...occurrence, yieldSlot });
               // Retire only after queue ownership, success, cancellation or a durable terminal row.
               if (outcome !== 'unrecorded' && outcome !== 'enqueued')
                 await this.outbox.close(webhook.id, idempotencyKey, 'dispatched');
+              if (outcome === 'unrecorded') ctx.onUnrecorded?.();
             } finally {
               this.inFlightDeliveries.delete(deliveryId);
             }
           }),
         );
+    parked = true;
     await admitted.catch(async error => {
       if (error instanceof Error && error.message === 'ConcurrencyLimiter queue full') {
         // Shed before the task ran, so nothing was POSTed. The failure row reports the shed, but
         // the outbox row stays 'pending' on purpose: retiring it would drop the only copy of an
         // event the receiver provably never got. The sweep replays it once the backlog clears.
-        await this.recordUndelivered(
+        await this.preflight.recordUndelivered(
           webhook,
           deliveryId,
           idempotencyKey,
@@ -1404,7 +1986,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         // onModuleDestroy can await it (the limiter slot bookkeeping no longer covers this task).
         // Its outbox row stays 'pending': no POST was accepted, so the next start's sweep is what
         // finally delivers the event.
-        const record = this.recordUndelivered(
+        const record = this.preflight.recordUndelivered(
           webhook,
           deliveryId,
           idempotencyKey,
@@ -1437,7 +2019,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     event: string,
     idempotencyKey: string,
     data: Record<string, unknown>,
-    options: { singleAttempt?: boolean; oneDirectAttempt?: boolean; signal?: AbortSignal } = {},
+    options: { singleAttempt?: boolean; oneDirectAttempt?: boolean; fromKeptCopy?: boolean; signal?: AbortSignal } = {},
   ): Promise<WebhookDeliveryOutcome> {
     const deliveryId = generateDeliveryId();
     try {
@@ -1447,6 +2029,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         baseData: data,
         singleAttempt: options.singleAttempt,
         oneDirectAttempt: options.oneDirectAttempt,
+        fromKeptCopy: options.fromKeptCopy,
         signal: options.signal,
       });
       // The receiver has the event. An operator redrive of a failure row can find the same delivery
@@ -1560,10 +2143,50 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   private directOptions(ctx: DispatchEventContext): DirectDeliveryOptions {
     return {
       yieldSlot: ctx.yieldSlot,
+      baseData: ctx.fromKeptCopy ? undefined : ctx.baseData,
+      storedHash: ctx.storedHash,
       replayData: this.keepsFailurePayload() ? ctx.baseData : undefined,
       singleAttempt: ctx.singleAttempt || ctx.oneDirectAttempt,
       signal: ctx.signal,
+      copyLost: ctx.copyLost,
     };
+  }
+
+  /**
+   * What a message delivery takes from its outbox row before it is sent again (see changedData): null once the message
+   * was taken back, the data a change rewrote the row with, else undefined. 'unread' for a row that cannot be read: the
+   * delivery goes on with what it holds, unless a change of the message is held on this node (isMessageHeld). 'lost'
+   * once a bound dropped the copy kept for it: it is stopped (see lostCopyFailure).
+   */
+  private async messageChange(
+    webhookId: string,
+    idempotencyKey: string,
+    held: Pick<DispatchEventContext, 'sessionId' | 'event' | 'baseData' | 'storedHash'>,
+  ): Promise<Record<string, unknown> | null | undefined | 'unread' | 'lost'> {
+    try {
+      const row = await this.outbox.currentMessagePayload(webhookId, idempotencyKey, held.event);
+      if (row === 'lost') return row;
+      return changedData(row, held.storedHash === undefined ? dataHash(held.baseData) : held.storedHash);
+    } catch (error) {
+      if (this.isMessageHeld(idempotencyKey, webhookId, { ...held, data: held.baseData })) return 'unread';
+      this.logger.warn('Could not read the outbox row of a message delivery; sending what it holds', {
+        webhookId,
+        idempotencyKey,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'webhook_outbox_check_failed',
+      });
+      return 'unread';
+    }
+  }
+
+  private logSkippedRetracted(webhookId: string, event: string, deliveryId: string, idempotencyKey: string): void {
+    this.logger.warn('Skipping webhook delivery: its outbox row was closed (message taken back or delivered)', {
+      webhookId,
+      event,
+      deliveryId,
+      idempotencyKey,
+      action: 'webhook_skipped_retracted',
+    });
   }
 
   /**
@@ -1589,10 +2212,61 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       ? AbortSignal.any([this.shutdownAbort.signal, options.signal])
       : this.shutdownAbort.signal;
     let current = webhook;
+    let { baseData, storedHash, replayData } = options;
     for (let attempt = 1; ; attempt++) {
+      if (attempt === 1 && options.copyLost) throw await this.lostCopyFailure(current, payload, attempt, replayData);
+      if (attempt > 1 && baseData) {
+        // The message may have been revoked, deleted through the API or edited during the backoff.
+        const changed = await this.messageChange(webhook.id, payload.idempotencyKey, {
+          sessionId: payload.sessionId,
+          event: payload.event,
+          baseData,
+          storedHash,
+        });
+        if (changed === null) {
+          this.logSkippedRetracted(webhook.id, payload.event, payload.deliveryId, payload.idempotencyKey);
+          return false;
+        }
+        if (
+          this.isMessageHeld(payload.idempotencyKey, webhook.id, {
+            sessionId: payload.sessionId,
+            event: payload.event,
+            data: baseData,
+          })
+        ) {
+          // A change of the message kept on this node may still withdraw or rewrite this copy. Not an attempt: the
+          // backoff that came before this one again, then the same check.
+          await yieldSlot(() => setTimeout(delay * 2 ** (attempt - 2), undefined, { signal: backoffSignal }));
+          attempt--;
+          continue;
+        }
+        if (changed === 'lost') throw await this.lostCopyFailure(current, payload, attempt, replayData);
+        if (changed && changed !== 'unread') {
+          const rebuilt = await this.preflight.preflightDelivery(current, payload.deliveryId, payload.idempotencyKey, {
+            sessionId: payload.sessionId,
+            event: payload.event,
+            baseData: changed,
+          });
+          if (rebuilt === 'unrecorded') throw new UnrecordedWebhookFailure('a rebuilt delivery could not be recorded');
+          // Cancelled by a plugin, or refused and recorded as undelivered: nothing more to send.
+          if (!rebuilt || rebuilt === 'cancelled') return false;
+          ({ finalPayload: payload, body } = rebuilt);
+          baseData = changed;
+          storedHash = undefined;
+          if (replayData) replayData = changed;
+        }
+      }
       try {
-        // Inside the try: a read error counts as a failed attempt, as it does for a queued job.
-        const row = await this.webhookRepository.findOne({ where: { id: webhook.id } });
+        // A read that fails spends no attempt: the delivery goes out with the row read last, as a parked one does.
+        const row = await this.webhookRepository.findOne({ where: { id: webhook.id } }).catch((error: unknown) => {
+          this.logger.warn('Could not re-read the webhook before a delivery attempt; using the row read last', {
+            webhookId: webhook.id,
+            deliveryId: payload.deliveryId,
+            error: error instanceof Error ? error.message : String(error),
+            action: 'webhook_stale_check_failed',
+          });
+          return current;
+        });
         if (!isDeliverableWebhook(row, payload.event, payload.sessionId)) {
           this.logger.warn('Skipping webhook delivery: webhook removed, disabled, unsubscribed or reassigned', {
             webhookId: webhook.id,
@@ -1661,10 +2335,22 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           await yieldSlot(() => setTimeout(delay * 2 ** (attempt - 1), undefined, { signal: backoffSignal }));
           continue;
         }
-        // All direct-path retries exhausted — persist a durable failure record before giving up, mirroring
+        // All direct-path retries exhausted. Persist a durable failure record before giving up, mirroring
         // the queued processor's final-attempt path so the queue-disabled path isn't a blind spot.
         // The recorder writes this row first and only then removes an attempts-0 row of the same
-        // delivery (a shed or refused dispatch), so a restart at any point keeps a record.
+        // delivery (a shed or refused dispatch), so a restart at any point keeps a record. A message's
+        // copy for a redrive is the one a change left on its outbox row, none once it was taken back.
+        if (replayData && baseData) {
+          const changed = await this.messageChange(webhook.id, payload.idempotencyKey, {
+            sessionId: payload.sessionId,
+            event: payload.event,
+            baseData,
+            storedHash,
+          });
+          if (changed === 'lost') {
+            if (this.outbox.unwrittenCopy(webhook.id, payload.idempotencyKey) === null) replayData = undefined;
+          } else if (changed !== undefined && changed !== 'unread') replayData = changed ?? undefined;
+        }
         const recorded = await recordTerminalFailure(this.failureRepository, this.logger, {
           webhookId: webhook.id,
           sessionId: payload.sessionId,
@@ -1674,15 +2360,42 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           deliveryId: payload.deliveryId,
           attempts: attempt,
           error,
-          ...(options.replayData
-            ? { payload: options.replayData, payloadRetentionHours: this.payloadRetentionHours() }
-            : {}),
+          ...(replayData ? { payload: replayData, payloadRetentionHours: this.payloadRetentionHours() } : {}),
         });
         if (recorded !== false) incrementWebhookDeliveryFailures();
         if (recorded === null) throw new UnrecordedWebhookFailure(redactSsrfError(error));
         throw error;
       }
     }
+  }
+
+  /**
+   * A delivery whose kept copy a bound dropped is not sent, as a change of its message can no longer reach it: it is
+   * recorded as a terminal failure, with its pre-hook data for a redrive (while payload retention is on) unless a change
+   * of the message came after the drop. Answers the error that ends it: UnrecordedWebhookFailure when the record could
+   * not be written.
+   */
+  private async lostCopyFailure(
+    webhook: Webhook,
+    payload: WebhookPayload,
+    attempts: number,
+    replayData?: Record<string, unknown>,
+  ): Promise<Error> {
+    const error = new Error(LOST_COPY_ERROR);
+    const kept = replayData && this.outbox.unwrittenCopy(webhook.id, payload.idempotencyKey) !== null;
+    const recorded = await recordTerminalFailure(this.failureRepository, this.logger, {
+      webhookId: webhook.id,
+      sessionId: payload.sessionId,
+      event: payload.event,
+      url: webhook.url,
+      idempotencyKey: payload.idempotencyKey,
+      deliveryId: payload.deliveryId,
+      attempts,
+      error,
+      ...(kept ? { payload: replayData, payloadRetentionHours: this.payloadRetentionHours() } : {}),
+    });
+    if (recorded !== false) incrementWebhookDeliveryFailures();
+    return recorded === null ? new UnrecordedWebhookFailure(LOST_COPY_ERROR) : error;
   }
 
   private markFailingWebhook(webhookId: string): void {

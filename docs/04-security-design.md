@@ -100,6 +100,11 @@ lookups require OPERATOR. These permissions still apply within the key's IP, ses
 | Chats     | `allowedChats`      | Empty/absent = every chat; non-empty = default-deny: only chat-scoped routes, MCP tools and events, only for a listed chat, else `403` (an event outside the list is never delivered); Bull Board refuses it        |
 | Blocked   | `deniedPermissions` | Empty/absent = nothing blocked; each entry turns off the routes tagged with that capability, else `403` (see "Blocked capabilities")                                                                                |
 
+Scope a chat-restricted key by the number WhatsApp holds for a contact (the number check returns it).
+A key scoped to another spelling of that number, a Brazilian mobile with or without its ninth digit for
+one, can send to it but reads neither the contact's replies nor the rows of its own sends: both are
+stored under the number WhatsApp holds.
+
 The key-lifecycle routes (`/api/auth/api-keys`) are fenced with `@RequireUnscopedKey()`: session- and
 chat-scoped keys are refused. A capability-restricted ADMIN may manage keys unless it blocks
 `apikeys:manage`. A key it creates inherits all of its blocked capabilities. It may update only a key
@@ -353,8 +358,10 @@ OpenWA serves plain HTTP on its port; terminate **TLS at your reverse proxy / lo
 | Webhook secrets and custom headers                                  | Plaintext: `webhooks.secret` (`varchar`) and custom `webhooks.headers` (JSON, may carry receiver credentials) | Database access control; never returned by the webhook read DTOs (write-only) and omitted from `GET /api/infra/export-data` webhook rows.                                                                                                                                                                                             |
 | Proxy credentials                                                   | Plaintext — `sessions.proxyUrl` may embed `user:pass`                                                         | Database access control; never returned by the session read DTOs — only masked `proxyHost`, `proxyType` (derived from the URL scheme), and `hasCredentials` on `GET/PATCH /proxy`. The userinfo is also stripped from `GET /api/infra/export-data` session rows; scheme and host survive so a restore cannot silently connect direct. |
 | Bootstrap admin key file (`data/.api-key`, or `BOOTSTRAP_KEY_FILE`) | Plaintext raw ADMIN key, written `0600` on first boot                                                         | Owner-only file permissions; removed when the key it holds is revoked or deleted. Delete it once the key is stored elsewhere.                                                                                                                                                                                                         |
-| Plugin instance secrets                                             | Plaintext: `plugin_instances.secret`, `verifyToken`, `config`                                                 | Database access control; `secret`, `verifyToken` and the config fields a plugin marks secret are masked on API reads, but `GET /api/infra/export-data` includes all three verbatim, so treat an export file as a secret.                                                                                                              |
+| Plugin instance secrets                                             | Plaintext: `plugin_instances.secret`, `verifyToken`, `config`                                                 | Database access control; `secret`, `verifyToken` and the config fields a plugin marks secret are masked on API reads. `GET /api/infra/export-data` leaves them out unless `?includePluginSecrets=true`, which exports them verbatim, so treat such an export file as a secret.                                                        |
 | Generated config (`data/.env.generated`)                            | Plaintext file, written `0600`                                                                                | Owner-only file permissions.                                                                                                                                                                                                                                                                                                          |
+| Recovery journal (`RECOVERY_JOURNAL_PATH`)                          | Plaintext JSON lines, `0600`: kept changes (edited text), event data, delivery copies, sent bulk items        | Owner-only file permissions; written only while the database refuses work, emptied once it took it all.                                                                                                                                                                                                                               |
+| Queued webhook jobs (Redis, with `QUEUE_ENABLED=true`)              | Plaintext JSON: the body to post, and the pre-hook data while failure payloads are retained (`replayData`)    | Redis access control. A job also holds, when its outbox row could not be written, the pre-hook data (`unwritten`) and the change of the message the queuing node wrote (`unwrittenChange`, a 60 s `held:` key); a `webhook:before` redaction does not apply to them in Redis. Kept: completed 1 h or 10,000, failed 24 h or 5,000.    |
 | Media files (`STORAGE_TYPE=local`, under `STORAGE_LOCAL_PATH`)      | Plaintext files: `0600` in `0700` directories, under a root set `0700` at every boot when the gateway owns it | Owner-only permissions; the gateway warns at boot when it does not own the root. Files written before 0.31.0 keep their mode but sit under the `0700` root. With `STORAGE_TYPE=s3` the bucket policy protects the objects; the root, set the same way, can hold what was stored before the move and any outage fallback.              |
 | Storage export archive (`data/exports/`)                            | Plaintext `tar.gz` of every stored file, written `0600` in a `0700` directory                                 | Owner-only permissions, so as private as the media it copies, on `local` and `s3` alike. Deleted after `STORAGE_EXPORT_TTL_MS` (default 1 h), or by the boot sweep once older than `STORAGE_EXPORT_SWEEP_MAX_AGE_MS` (default 24 h). Treat it as the media store itself.                                                              |
 | Message content                                                     | Plaintext in the `messages` table                                                                             | Database access control.                                                                                                                                                                                                                                                                                                              |
@@ -534,7 +541,8 @@ app.enableCors({
   },
   credentials: corsPolicy.credentials, // false whenever the allowlist is a wildcard
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization', 'X-Request-ID', 'Idempotency-Key'],
+  // X-Requested-With is the CSRF header the dashboard sends on cookie-authenticated mutations.
+  allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization', 'X-Request-ID', 'Idempotency-Key', 'X-Requested-With'],
   // Throttlers are named, so rate-limit headers carry a per-window suffix
   // (see "Response on limit" above); there are no unsuffixed variants.
   exposedHeaders: ['X-RateLimit-Limit-short', 'X-RateLimit-Remaining-short', '...', 'Idempotent-Replayed'],
@@ -662,7 +670,8 @@ app.use(helmet({
 ### What Gets Logged
 
 > **Reality check:** persisted audit coverage currently includes API-key create/update/revoke/delete
-> (updates carry before/after authorization state), rejected authentication, session lifecycle
+> (updates carry before/after authorization state), rejected authentication, dashboard browser sessions
+> opened and ended (`browser_session_created`, `browser_session_ended`), session lifecycle
 > (including disconnects caused by WhatsApp unlinking the device, account restrictions and their
 > lifting, and refused rebinds), a privacy id newly reported for a phone number the lid table already
 > maps to another (`phone_second_lid_reported`), integration-instance creation, update, secret rotation, deletion,

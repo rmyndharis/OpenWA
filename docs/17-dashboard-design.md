@@ -569,13 +569,21 @@ Three pages keep a server list in local state instead of the query cache:
 
 ### API client — raw payloads, no `{ data }` envelope
 
-The client lives in `src/services/api.ts`. A single `request<T>()` helper attaches the `X-API-Key`
-header from `sessionStorage`, then returns **the parsed JSON body as-is** — the backend sends the
+The browser never keeps the API key. Sign-in (`authApi.createSession`) sends it once, as `X-API-Key`,
+to `POST /api/auth/session`, which answers with the `openwa_session` cookie (`HttpOnly; SameSite=Strict`,
+backed by `browser_sessions` in `main.sqlite`); `sessionStorage` keeps only the key's non-secret id,
+role, scope and engine. On load the dashboard re-validates with `GET /api/auth/session`, and sign-out
+calls `DELETE /api/auth/session`.
+
+The client lives in `src/services/api.ts`. A single `request<T>()` helper sends every call with
+`credentials: 'include'`, so the browser attaches the cookie, and with the header
+`X-Requested-With: OpenWA-Dashboard`, which the API requires on a cookie request other than `GET`,
+`HEAD` or `OPTIONS`. It then returns **the parsed JSON body as-is** — the backend sends the
 raw handler payload, so `request<Session[]>('/sessions')` resolves to a bare `Session[]`, not
 `{ data: Session[] }`. (A `204 No Content` resolves to `undefined`; a `401`, or a `403` because the
-key's `allowedIps` refuse this client, clears the stored key and redirects to login, but only when the
-stored key is the one the request carried: a late answer for a key since replaced fails like any other
-error, and a keyless request answered after sign-out stays silent. Any other `403` leaves the key in
+key's `allowedIps` refuse this client, clears the session metadata and redirects to login, but only when
+the stored key id is the one active when the request was sent: a late answer after another sign-in fails
+like any other error, and one answered after sign-out stays silent. Any other `403` leaves the session in
 place.) Endpoints are grouped into typed namespaces — `sessionApi`, `webhookApi`,
 `templateApi`, `apiKeyApi`, `auditApi`, `messageApi`, `infraApi`, `pluginsApi`, `statsApi`, ...
 
@@ -584,18 +592,18 @@ place.) Endpoints are grouped into typed namespaces — `sessionApi`, `webhookAp
 export const API_BASE_URL = `${(import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')}/api`;
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const apiKey = sessionStorage.getItem('openwa_api_key');
+  const sentActorId = getActiveApiKeyId(); // non-secret key id, compared when a 401 comes back
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
+    credentials: 'include', // the browser attaches the HttpOnly openwa_session cookie
     headers: {
       'Content-Type': 'application/json',
-      ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+      'X-Requested-With': 'OpenWA-Dashboard',
       ...options.headers,
     },
   });
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.message || `HTTP ${response.status}`);
+    return handleErrorResponse<T>(response, sentActorId); // throws, or signs out on 401
   }
   if (response.status === 204) return undefined as T;
   return response.json(); // ← the raw payload, no unwrapping
@@ -662,8 +670,12 @@ Real-time updates use **socket.io** (`socket.io-client`), not a raw browser `Web
   that of `VITE_WS_URL` when set, else that of `VITE_API_URL` (so a split-origin build reaches the
   API), else `window.location.origin`. A path or trailing slash on either variable is dropped, and a
   value with no scheme (`host:port`) is dialled on the page's protocol.
-- **API key via the socket.io `auth` payload (and an `X-API-Key` header for proxies), deliberately
-  _not_ in the query string** — a key in the handshake URL would leak into access logs / `Referer`.
+- **The session cookie, not a key.** The socket opens with `withCredentials: true`, so its handshake
+  carries the `openwa_session` cookie; the gateway accepts a cookie handshake only from the API's own
+  origin or one listed explicitly in `CORS_ORIGINS`. With no active key id in `sessionStorage` (signed
+  out) the hook does not connect. Other clients authenticate with the socket.io `auth` payload
+  (`auth.apiKey`) or an `X-API-Key` header, never the query string, where a key would leak into access
+  logs and `Referer`.
 - **Reconnection is socket.io's built-in mechanism** — `reconnectionAttempts: 5`,
   `reconnectionDelay: 1000` — not a hand-rolled `setTimeout(connect, 3000)`. When all attempts are
   exhausted the manager fires `reconnect_failed`; the hook surfaces that as `connectionFailed` so the
@@ -678,6 +690,7 @@ Real-time updates use **socket.io** (`socket.io-client`), not a raw browser `Web
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { API_ORIGIN } from '../services/api';
+import { getActiveApiKeyId } from '../utils/authLifecycle';
 import { resolveSocketUrl } from '../utils/urlSecurity';
 
 // The origin of VITE_WS_URL, else of VITE_API_URL, else the page origin.
@@ -696,15 +709,13 @@ export function useWebSocket(events: WebSocketEvents = {}) {
 
   const connect = useCallback(() => {
     if (socketRef.current?.connected) return;
-    const apiKey = sessionStorage.getItem('openwa_api_key');
-    if (!apiKey) return;
+    if (!getActiveApiKeyId()) return; // signed out: no session cookie to send
 
     socketRef.current = io(`${SOCKET_URL}/events`, {
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
-      auth: { apiKey }, // key in the handshake auth, NOT the URL
-      extraHeaders: { 'X-API-Key': apiKey }, // header copy for proxies
+      withCredentials: true, // the handshake carries the HttpOnly openwa_session cookie
     });
 
     socketRef.current.on('connect', () => {
@@ -860,9 +871,11 @@ How it fits together:
 In development the build is absent, so serve-static stays inert and the Vite dev server (port
 `2886`, see above) handles the UI with HMR while proxying `/api` + `/socket.io` to the API.
 
-**Split-origin hosting is still supported.** Same-origin serving is the default, not a lock-in: to
-host the dashboard separately (a CDN, an object store, or its own container), build it with the API
-origin baked in and deploy `dashboard/dist` wherever you like:
+**Split-origin hosting is still supported, on the same site as the API.** Same-origin serving is the
+default, not a lock-in: to host the dashboard separately (a CDN, an object store, or its own
+container), build it with the API origin baked in and serve `dashboard/dist` from an origin on the
+same site as the API, that is the same registrable domain (another subdomain or port is fine), such as
+`https://dash.example.com` for this build:
 
 ```bash
 VITE_API_URL=https://api.example.com npm run build   # in dashboard/
@@ -870,8 +883,14 @@ VITE_API_URL=https://api.example.com npm run build   # in dashboard/
 
 `dashboard/src/services/api.ts` reads `VITE_API_URL` and calls that origin instead of same-origin
 `/api`. The realtime socket follows the same origin unless `VITE_WS_URL` overrides it. Set
-`SERVE_DASHBOARD=false` on the API so it stops serving its own copy. Remember to add the dashboard's
-origin to `CORS_ORIGINS` on the API.
+`SERVE_DASHBOARD=false` on the API so it stops serving its own copy. Add the dashboard's origin to
+`CORS_ORIGINS` on the API as an explicit entry: CORS credentials and the cookie origin checks honour
+only explicit entries, never `*`, so without one the API refuses the dashboard's cookie requests other
+than `GET`, `HEAD` or `OPTIONS` and its socket handshakes. The sign-in cookie is set by the API's
+host, without a `Domain` attribute, and is `HttpOnly; SameSite=Strict`. A dashboard on another site
+than the API (another registrable domain) cannot keep a session: sign-in answers `200`, but the
+browser neither stores nor sends a `SameSite=Strict` cookie across sites, so the next request answers
+`401` and the dashboard returns to the login form.
 
 For TLS or public exposure of the default single-port setup, terminate at your own reverse proxy
 (nginx, Caddy, a cloud load balancer, or a k8s Ingress) in front of the API; see

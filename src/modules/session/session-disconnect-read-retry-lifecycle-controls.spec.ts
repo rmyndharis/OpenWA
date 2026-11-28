@@ -102,7 +102,7 @@ function fixture() {
     factory as never,
     registry,
     { clear: jest.fn() } as never,
-    {} as never,
+    { settleParkedChanges: jest.fn().mockResolvedValue(undefined) } as never,
     errorStore as never,
     restrictions as never,
     presence as never,

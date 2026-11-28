@@ -394,6 +394,7 @@
     "connecting": "Connessione in corso...",
     "invalidKey": "Chiave API non valida",
     "connectionError": "Impossibile connettersi al server. Riprova.",
+    "sessionNotKept": "La chiave è stata accettata, ma questo browser non ha conservato il cookie di sessione. La dashboard e l'API devono trovarsi sullo stesso sito o essere servite dalla stessa origine.",
     "help": "Serve aiuto?",
     "viewDocs": "Visualizza la documentazione",
     "footer": "Fatto con il ❤️ da Yudhi Armyndharis e dalla Community di OpenWA",
@@ -1310,11 +1311,13 @@
       "exportFailed": "Impossibile esportare i dati",
       "exportPartialTitle": "Nel backup mancano alcuni file multimediali",
       "exportPartial": "{{count}} allegato/i ha/hanno superato il limite di spazio per l'esportazione dei file multimediali e sono stati salvati come segnaposto. I messaggi verranno ripristinati, ma non i relativi file multimediali.",
+      "exportIncomplete": "Il download è terminato prima che il backup fosse completo, quindi non è stato salvato nulla. Riprova.",
       "importFailed": "Impossibile importare i dati",
       "importOk": "Dati importati",
       "importConfirm": "L'importazione SOSTITUIRÀ tutti i dati attuali con il backup ({{rows}} righe). Questa operazione non può essere annullata. Continuare?",
       "invalidFile": "Questo file non è un backup dati valido di OpenWA.",
-      "importTooLarge": "Il backup supera il limite della richiesta. Aumenta BODY_SIZE_LIMIT sul server e riprova."
+      "importTooLarge": "Il backup supera il limite della richiesta. Aumenta BODY_SIZE_LIMIT sul server e riprova.",
+      "importStopped": "Il server si è arrestato durante l'importazione e l'ha annullata, quindi i tuoi dati non sono cambiati. Importa di nuovo lo stesso file quando il server sarà tornato disponibile."
     },
     "statusLoadError": "Impossibile caricare lo stato attuale dell'infrastruttura. Aggiorna per riprovare.",
     "configLoadError": "Impossibile caricare la configurazione salvata, quindi non è modificabile qui. Aggiorna per riprovare."

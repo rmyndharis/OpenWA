@@ -23,13 +23,15 @@ function fixture() {
       return Promise.resolve({ affected: 1 });
     }),
   };
+  const registry = new EngineRegistry();
+  const messages = { settleParkedChanges: jest.fn().mockResolvedValue(undefined) };
   const lifecycle = new SessionEngineLifecycle(
     repository as never,
     { options: { type: 'better-sqlite3' } } as never,
     { create: jest.fn(), purgeSessionData: jest.fn() } as never,
-    new EngineRegistry(),
+    registry,
     { clear: jest.fn() } as never,
-    {} as never,
+    messages as never,
     { attachTo: <T>(value: T): T => value, clear: jest.fn(), set: jest.fn(), get: jest.fn() } as never,
     { attachTo: <T>(value: T): T => value, clear: jest.fn(), clearIfDisprovedByReady: jest.fn() } as never,
     { clear: jest.fn(), getOwnIntent: jest.fn() } as never,
@@ -46,7 +48,7 @@ function fixture() {
     { isShuttingDown: () => false } as never,
     { logWarn: jest.fn().mockResolvedValue(undefined), logInfo: jest.fn().mockResolvedValue(undefined) } as never,
   );
-  return { lifecycle, repository };
+  return { lifecycle, repository, registry, messages };
 }
 
 // SessionResponseDto.engineLoaded says what a lifecycle route does while the node holds no engine for the session:
@@ -71,5 +73,22 @@ describe('the lifecycle verbs of a session with no engine in memory', () => {
 
     expect(repository.update).not.toHaveBeenCalled();
     await lifecycle.shutdown();
+  });
+});
+
+describe('the shutdown of the session engines', () => {
+  it('writes what the database refused in one bounded pass, once the engines are gone', async () => {
+    const { lifecycle, registry, messages } = fixture();
+    const order: string[] = [];
+    registry.set(ID, {
+      destroy: jest.fn(() => (order.push('engine destroyed'), Promise.resolve())),
+    } as never);
+    messages.settleParkedChanges.mockImplementation(
+      (budgetMs: number) => (order.push(`pass ${budgetMs} ms`), Promise.resolve()),
+    );
+
+    await lifecycle.shutdown();
+
+    expect(order).toEqual(['engine destroyed', 'pass 1000 ms']);
   });
 });

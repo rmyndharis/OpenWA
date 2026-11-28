@@ -12,6 +12,15 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { RecoveryQueue, isDatabaseUnavailable } from '../../common/utils/recovery-queue';
+import { WebhookService } from '../webhook/webhook.service';
+import {
+  KeptChatPurge,
+  chatPurgeKey,
+  journalChatPurge,
+  restoredChatPurge,
+  type ChatPurgeSteps,
+} from './chat-purge-record';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import {
   Repository,
@@ -28,7 +37,8 @@ import {
 import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { setTimeout } from 'node:timers/promises';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
-import { Session, SessionStatus } from './entities/session.entity';
+import { ACTIVE_STATUSES, Session, SessionStatus } from './entities/session.entity';
+import { STOP_MOVES, type SessionRowWrite } from './session-row-park';
 import {
   CreateSessionDto,
   SessionConfigResponseDto,
@@ -53,6 +63,7 @@ import { sessionNotFound } from './session-id.pipe';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { ListingMemo } from '../../common/utils/listing-memo';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
+import { markAfterEffect } from '../../common/filters/database-unavailable.filter';
 import { awaitNoOpenTransaction } from '../../common/utils/shared-connection';
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import {
@@ -158,20 +169,6 @@ interface SessionStops {
 }
 
 /**
- * Statuses that assert an engine is running somewhere. The boot reset clears them for every row this
- * node may claim; markLapsedDisconnected clears them for a row whose holder never came back, a
- * QR_READY row only while it has no phone. FAILED and CREATED stay out of both: an operator has to
- * see them.
- */
-const ACTIVE_STATUSES = [
-  SessionStatus.READY,
-  SessionStatus.INITIALIZING,
-  SessionStatus.QR_READY,
-  SessionStatus.AUTHENTICATING,
-  SessionStatus.ACTION_REQUIRED,
-];
-
-/**
  * The session-record API: CRUD over the sessions table, aggregate stats, and the thin engine query
  * proxies (QR/pairing/chats/groups/chat-state) behind the controller routes. Every engine LIFECYCLE
  * verb (start/stop/logout/forceKill/delete/stopOrphanEngines), the reconnect machinery, the engine
@@ -243,9 +240,39 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // source the reconnect scheduler and the takeover sweep consult.
     @Optional()
     private readonly shutdownService?: ShutdownService,
+    // The shared recovery queue, reached through the webhook service as the projector reaches it: a purge the database
+    // refused is kept there and runs once it answers.
+    @Optional()
+    private readonly webhookService?: WebhookService,
   ) {
     this.engineRegistry.onRetire(id => this.chatListings.drop(id));
+    this.recovery = this.webhookService?.recoveryQueue?.();
+    this.recovery?.register('purge', {
+      encode: record => (record instanceof KeptChatPurge ? journalChatPurge(record) : undefined),
+      decode: (key, value) => {
+        const p = restoredChatPurge(value);
+        return p ? new KeptChatPurge(key, p.sessionId, p.chatId, p.cutoff, p.since, this.purgeSteps) : undefined;
+      },
+    });
   }
+
+  private readonly recovery?: RecoveryQueue;
+
+  private readonly purgeSteps: ChatPurgeSteps = {
+    purge: async record => {
+      await this.purgeStoredChatOnce(record.sessionId, record.chatId, new Date(record.cutoff));
+      return true;
+    },
+    released: (record, reason) => {
+      if (!reason) return;
+      this.logger.error('The removal of a cleared chat the database refused could not be kept any longer', undefined, {
+        sessionId: record.sessionId,
+        chatId: record.chatId,
+        reason,
+        action: 'chat_purge_lost',
+      });
+    },
+  };
 
   /**
    * True from the start of the shutdown drain. An engine launched during the drain would be torn
@@ -263,8 +290,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * and resetting all of them assumed that somewhere was always here — true of a single process,
    * and wrong beside a live peer, whose sessions would be reported disconnected while they are
    * serving traffic. A row held by another node with an unexpired lease is therefore left alone.
+   *
+   * What the last process kept of these rows, refused by the database before it stopped, lands first:
+   * the reset and auto-start read what it writes.
    */
   async onModuleInit(): Promise<void> {
+    await this.engineLifecycle.rows?.landRestored();
     const claimable = this.ownership?.claimableWhere() ?? [{}];
     const result = await this.sessionRepository.update(
       claimable.map(clause => ({ ...clause, status: In(ACTIVE_STATUSES) })),
@@ -493,7 +524,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // after this one (webhook drain, queue worker close, usage flush, plugin onDisable), and the claims
     // lapse with their lease anyway.
     try {
-      await this.ownership?.releaseAll(this.startReservations.keys());
+      // The claims of rows with a write still kept stay too: the next start of this node lands it under them.
+      await this.ownership?.releaseAll([
+        ...this.startReservations.keys(),
+        ...(this.engineLifecycle.rows?.keptSessions() ?? []),
+      ]);
     } catch (error) {
       this.logger.warn('Could not release the session claims at shutdown; they lapse with their lease', {
         action: 'session_claim_release_failed',
@@ -766,8 +801,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           })
           .catch((error: unknown) => {
             if (request.state !== 'taken') this.withdrawStop(request);
-            // Its row read removed nothing yet, so a database that did not answer it is the retryable 503.
-            throw readFailed ? this.unavailableIfDatabaseDown(error, 'delete', id) : error;
+            // Its row read removed nothing yet, so a database that did not answer it is the retryable 503. What fails
+            // after it does so with the engine torn down, and keeps its answer.
+            throw readFailed ? this.unavailableIfDatabaseDown(error, 'delete', id) : markAfterEffect(error);
           });
       } finally {
         endDelete();
@@ -887,7 +923,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     if (stops.givingBack) await stops.givingBack;
     const record = async (sessions: Repository<Session>): Promise<void> => {
       const { affected } = await sessions.update({ id, desiredState: IsNull() }, { desiredState: 'deleting' });
-      if (affected === 1) stops.recorded = true;
+      // A record an earlier delete left, whose refused clear is kept, is this delete's to clear.
+      if (affected === 1 || this.engineLifecycle.rows?.takeClear(id) === true) stops.recorded = true;
       await sessions.update({ id, desiredState: 'stopped' }, { desiredState: 'deleting-stopped' });
     };
     if (!this.ownership) return record(this.sessionRepository);
@@ -934,6 +971,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       );
       return true;
     } catch (error) {
+      // Kept and written once the database answers: nothing else takes the record off a session no delete holds.
+      const moves: SessionRowWrite['moves'] = [['deleting-stopped', 'stopped']];
+      if (clear) moves.unshift(['deleting', null]);
+      const rows = this.engineLifecycle.rows;
+      rows?.keep(id, { field: 'desiredState', moves, owners: rows.owners() }, error);
       this.logger.warn(`Could not clear the stop a failed delete recorded for session ${id}`, {
         sessionId: id,
         action: 'session_delete_stop_clear_failed',
@@ -1192,12 +1234,31 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // Fenced like the boot reset: a FAILED on a row a peer has since adopted is the peer's.
         if (retryError instanceof ServerShuttingDownException) {
           const claimable = this.ownership?.claimableWhere() ?? [{}];
-          await this.sessionRepository
-            .update(
+          const rows = this.engineLifecycle.rows;
+          const handBack: SessionRowWrite = {
+            field: 'status',
+            moves: [[SessionStatus.FAILED, SessionStatus.DISCONNECTED]],
+            owners: rows?.owners(),
+          };
+          const live = rows?.begin(id, 'status');
+          if (live?.wait) await live.wait;
+          const superseded = rows?.kept(id, 'status');
+          try {
+            const { affected } = await this.sessionRepository.update(
               claimable.map(clause => ({ ...clause, id, status: SessionStatus.FAILED })),
               { status: SessionStatus.DISCONNECTED },
-            )
-            .catch(() => undefined);
+            );
+            live?.end();
+            if (affected) rows?.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
+            // The first attempt's FAILED may be kept, refused, and would land after this, keeping the session down at
+            // the next boot: the hand-back goes with it.
+            else rows?.follow(id, handBack);
+          } catch (error) {
+            // Kept for the next boot, which lands it before its reset.
+            rows?.keep(id, handBack, error);
+          } finally {
+            live?.end();
+          }
         }
         throw retryError;
       }
@@ -1238,8 +1299,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // not adopted. The foreign-node 409 keeps its claim (it is the peer's), and so does a 404.
       if (error instanceof BadGatewayException) await this.releaseAfterTeardown(id);
       this.discardStopMarkForMissingSession(id, request, error);
-      // Its row read stopped nothing yet, like the holder check before it.
-      throw readFailed ? this.unavailableIfDatabaseDown(error, 'stop', id) : error;
+      // Its row read stopped nothing yet, like the holder check before it; past them the stop has begun.
+      throw readFailed ? this.unavailableIfDatabaseDown(error, 'stop', id) : markAfterEffect(error);
     } finally {
       this.endStop(id, request);
       this.engineLifecycle.settleStopping(id, request.mark);
@@ -1284,8 +1345,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // Neither did a failure before an engine was found (the row read): only a request means one was.
       if (error instanceof BadRequestException) withdraw();
       if (request && !(error instanceof BadRequestException)) await this.releaseAfterTeardown(id);
-      // Its row read logged nothing out yet.
-      throw readFailed ? this.unavailableIfDatabaseDown(error, 'logout', id) : error;
+      // Its row read logged nothing out yet; past it the logout has begun.
+      throw readFailed ? this.unavailableIfDatabaseDown(error, 'logout', id) : markAfterEffect(error);
     } finally {
       if (request) this.endStop(id, request);
     }
@@ -1321,8 +1382,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // evict the engine: its request stands and it releases.
       if (error instanceof BadRequestException) withdraw();
       if (request && !(error instanceof BadRequestException)) await this.releaseAfterTeardown(id);
-      // Its row read killed nothing yet.
-      throw readFailed ? this.unavailableIfDatabaseDown(error, 'force-kill', id) : error;
+      // Its row read killed nothing yet; past it the kill has begun.
+      throw readFailed ? this.unavailableIfDatabaseDown(error, 'force-kill', id) : markAfterEffect(error);
     } finally {
       if (request) this.endStop(id, request);
     }
@@ -1401,13 +1462,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   private async keepDownIfStoppedDuringStart(id: string, explicit: boolean, stopRequestsBefore: number): Promise<void> {
     const stoppedMeanwhile = this.stoppedSince(id, stopRequestsBefore, { taken: true });
     if (!explicit || !stoppedMeanwhile || this.engineLifecycle.isEngineActive(id)) return;
-    await this.keepDown(id).catch((error: unknown) =>
+    await this.keepDown(id).catch((error: unknown) => {
+      const rows = this.engineLifecycle.rows;
+      rows?.keep(id, { field: 'desiredState', moves: STOP_MOVES, owners: rows.owners() }, error);
       this.logger.error(
         'Failed to record a stop that landed during a start',
         error instanceof Error ? error.message : String(error),
         { sessionId: id, action: 'start_keep_down_failed' },
-      ),
-    );
+      );
+    });
   }
 
   private markStopping(id: string, kind: StopRequest['kind']): StopRequest {
@@ -1526,18 +1589,30 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * release: the start's own outcome is the answer.
    */
   private async disconnectReleasedRow(id: string): Promise<void> {
+    const rows = this.engineLifecycle.rows;
+    const live = rows?.begin(id, 'status');
+    if (live?.wait) await live.wait;
+    const superseded = rows?.kept(id, 'status');
     try {
       const { affected } = await this.sessionRepository.update(
         { id, nodeId: IsNull(), status: In(ACTIVE_STATUSES) },
         { status: SessionStatus.DISCONNECTED },
       );
-      if (affected) this.engineLifecycle.announceStatus(id, SessionStatus.DISCONNECTED);
+      live?.end();
+      if (affected) {
+        rows?.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
+        this.engineLifecycle.announceStatus(id, SessionStatus.DISCONNECTED);
+      }
     } catch (error) {
+      const moves = ACTIVE_STATUSES.map((status): [string, string] => [status, SessionStatus.DISCONNECTED]);
+      rows?.keep(id, { field: 'status', moves, owners: [null] }, error);
       this.logger.warn(`Could not mark session ${id} disconnected after its start left no engine`, {
         sessionId: id,
         action: 'session_release_status_failed',
         error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      live?.end();
     }
   }
 
@@ -1549,6 +1624,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    */
   private async releaseClaimBestEffort(id: string, ownsClaim?: () => boolean): Promise<void> {
     if (!this.ownership) return;
+    // What is kept of the row lands only under this claim: the claim stays, to lapse with its lease, while it cannot.
+    const rows = this.engineLifecycle.rows;
+    if (rows && !(await rows.landKept(id))) {
+      this.logger.warn(`Keeping the claim of session ${id}: a write of its row is kept until the database answers`, {
+        sessionId: id,
+        action: 'session_claim_release_failed',
+        error: 'a kept row write could not be written yet',
+      });
+      return;
+    }
     try {
       if (ownsClaim) await this.ownership.release(id, ownsClaim);
       else await this.ownership.release(id);
@@ -1581,6 +1666,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       qrCode,
       status: session.status,
     };
+  }
+
+  /** Whether `qrCode` is not yet recorded in the audit log for this session and reader; see SessionEngineLifecycle. */
+  claimQrAudit(id: string, qrCode: string, reader: string): boolean {
+    return this.engineLifecycle.claimQrAudit(id, qrCode, reader);
+  }
+
+  /** Undoes claimQrAudit when its row could not be written; see SessionEngineLifecycle. */
+  releaseQrAudit(id: string, qrCode: string, reader: string): void {
+    this.engineLifecycle.releaseQrAudit(id, qrCode, reader);
   }
 
   /**
@@ -1939,35 +2034,55 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * same second would match. A pre-clear row from that second stays until a repeat call.
    */
   private async purgeStoredChat(sessionId: string, chatId: string, cutoff: Date): Promise<void> {
-    const BATCH = 500;
-    const bound = new Date(Math.floor(cutoff.getTime() / 1000) * 1000 - 1);
     try {
-      const expanded = await resolveJidCandidates(chatId, {
-        resolveLid: lid => this.lidMappingStore.findPhoneForLid(lid),
-        lidsForPhone: phone => this.lidMappingStore.findLidsForPhone(phone),
-      });
-      const chatIds = [...new Set([chatId, ...expanded])];
-      for (;;) {
-        const rows = await this.messageRepository.find({
-          where: { sessionId, chatId: In(chatIds), createdAt: LessThanOrEqual(bound) },
-          select: { id: true, waMessageId: true, chatId: true, sessionId: true },
-          take: BATCH,
-        });
-        if (rows.length === 0) return;
-        await this.messageRepository.delete({ id: In(rows.map(row => row.id)) });
-        for (const message of rows) {
-          void this.hookManager
-            .execute('message:deleted', { sessionId, message }, { sessionId, source: 'SessionService' })
-            .catch(() => undefined);
-        }
-        if (rows.length < BATCH) return;
-      }
+      await this.purgeStoredChatOnce(sessionId, chatId, cutoff);
     } catch (error) {
+      // Kept rather than only logged: bounded by its cutoff, it removes nothing stored since when it runs late.
+      if (this.recovery && isDatabaseUnavailable(error)) {
+        const key = chatPurgeKey(sessionId, chatId);
+        this.logger.warn('Keeping the removal of a cleared chat the database refused, to run it once it answers', {
+          sessionId,
+          chatId,
+          error: error instanceof Error ? error.message : String(error),
+          action: 'chat_purge_kept',
+        });
+        this.recovery.park(
+          key,
+          new KeptChatPurge(key, sessionId, chatId, cutoff.getTime(), Date.now(), this.purgeSteps),
+        );
+        return;
+      }
       this.logger.error(
         'Failed to remove stored messages of a cleared chat',
         error instanceof Error ? error.message : String(error),
         { sessionId, action: 'chat_local_purge_failed' },
       );
+    }
+  }
+
+  /** One run of a chat purge (see purgeStoredChat); throws when the database fails. */
+  private async purgeStoredChatOnce(sessionId: string, chatId: string, cutoff: Date): Promise<void> {
+    const BATCH = 500;
+    const bound = new Date(Math.floor(cutoff.getTime() / 1000) * 1000 - 1);
+    const expanded = await resolveJidCandidates(chatId, {
+      resolveLid: lid => this.lidMappingStore.findPhoneForLid(lid),
+      lidsForPhone: phone => this.lidMappingStore.findLidsForPhone(phone),
+    });
+    const chatIds = [...new Set([chatId, ...expanded])];
+    for (;;) {
+      const rows = await this.messageRepository.find({
+        where: { sessionId, chatId: In(chatIds), createdAt: LessThanOrEqual(bound) },
+        select: { id: true, waMessageId: true, chatId: true, sessionId: true },
+        take: BATCH,
+      });
+      if (rows.length === 0) return;
+      await this.messageRepository.delete({ id: In(rows.map(row => row.id)) });
+      for (const message of rows) {
+        void this.hookManager
+          .execute('message:deleted', { sessionId, message }, { sessionId, source: 'SessionService' })
+          .catch(() => undefined);
+      }
+      if (rows.length < BATCH) return;
     }
   }
 
@@ -2101,6 +2216,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   forgetSession(id: string): void {
     this.ownership?.forget(id);
     this.engineLifecycle.forgetSession(id);
+  }
+
+  /** A data import replaced the rows of these sessions: what this process kept for the rows before goes. */
+  forgetRestoredRows(ids: Iterable<string>): void {
+    for (const id of ids) this.engineLifecycle.rows?.restored(id);
   }
 
   /**

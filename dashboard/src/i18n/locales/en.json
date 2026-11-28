@@ -389,6 +389,7 @@
     "connecting": "Connecting...",
     "invalidKey": "Invalid API key",
     "connectionError": "Unable to connect to server. Please try again.",
+    "sessionNotKept": "The key was accepted, but this browser did not keep the session cookie. The dashboard and the API must be on the same site, or served from the same origin.",
     "help": "Need help?",
     "viewDocs": "View Documentation",
     "footer": "Made with ❤️ by Yudhi Armyndharis and the OpenWA Community",
@@ -1280,11 +1281,13 @@
       "exportFailed": "Couldn't export data",
       "exportPartialTitle": "Backup is missing some media",
       "exportPartial": "{{count}} attachment payload(s) exceeded the export media budget and were saved as placeholders. The messages restore; their media does not.",
+      "exportIncomplete": "The download ended before the backup was complete, so nothing was saved. Try again.",
       "importFailed": "Couldn't import data",
       "importOk": "Data imported",
       "importConfirm": "Importing will REPLACE all current data with the backup ({{rows}} rows). This cannot be undone. Continue?",
       "invalidFile": "That file isn't a valid OpenWA data backup.",
-      "importTooLarge": "Backup is too large for the request limit. Increase BODY_SIZE_LIMIT on the server and try again."
+      "importTooLarge": "Backup is too large for the request limit. Increase BODY_SIZE_LIMIT on the server and try again.",
+      "importStopped": "The server stopped during the import and rolled it back, so your data is unchanged. Import the same file again once the server is back."
     },
     "restart": {
       "idleTitle": "Configuration saved",

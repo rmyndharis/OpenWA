@@ -461,7 +461,8 @@ describe('cold-reachout rule for a contact stored under both its phone and its l
         await seedRepliedContacts(4, EARLY, MessageDirection.INCOMING);
         const service = await build();
 
-        await expect(countToday(service)).resolves.toEqual({ count: 0, statements: 3 + 4 });
+        // One read of which other forms received anything today, then the check of each chat that has such a form.
+        await expect(countToday(service)).resolves.toEqual({ count: 0, statements: 3 + 1 + 4 });
       });
 
       it('checks a contact reached under both forms once', async () => {
@@ -469,7 +470,8 @@ describe('cold-reachout rule for a contact stored under both its phone and its l
         await add(`${LID}@lid`, NINE);
         const service = await build();
 
-        // The chats, the lids of the phone and the phone of the lid, the history read, and one check.
+        // The chats, the lids of the phone and the phone of the lid, the history read, and the read of which other
+        // forms received anything today: none did, so neither chat is checked on its own.
         await expect(countToday(service)).resolves.toEqual({ count: 1, statements: 5 });
       });
     });

@@ -141,6 +141,8 @@ let sessionBody: {
   apiKeyId: 'key-op-1',
 };
 let hasServerCookie = false;
+// False models a browser that drops the Set-Cookie of the exchange (an API on another site, blocked cookies).
+let browserKeepsCookie = true;
 
 function installFetchStub(): void {
   globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -152,7 +154,7 @@ function installFetchStub(): void {
     let status = 200;
     let body: unknown = [];
     if (method === 'POST' && path === '/api/auth/session') {
-      hasServerCookie = true;
+      hasServerCookie = browserKeepsCookie;
       body = sessionBody;
     } else if (method === 'GET' && path === '/api/auth/session') {
       if (!hasServerCookie) {
@@ -233,6 +235,7 @@ afterEach(() => {
   sessionStorage.clear();
   fetchCalls.length = 0;
   hasServerCookie = false;
+  browserKeepsCookie = true;
   sessionBody = { valid: true, role: 'operator', engineType: 'whatsapp-web.js', apiKeyId: 'key-op-1' };
 });
 
@@ -261,6 +264,27 @@ test('a fresh sign-in exchanges the key at POST /auth/session without storing ra
   assert.equal(localStorage.getItem(LEGACY_KEY), null);
   // The engine comes from the same response: a non-admin key cannot read /infra/engines/current.
   assert.equal(sessionStorage.getItem(ENGINE_KEY), 'whatsapp-web.js');
+});
+
+// The exchange answers 200 even when the browser drops its cookie, and every request after it answers 401: signing in
+// on that answer alone showed the dashboard for a moment and then the login form again, with no message.
+test('a sign-in whose session cookie the browser did not keep stays on the login form and says why', async () => {
+  browserKeepsCookie = false;
+  rtl.render(createElement(App));
+  const input = await rtl.screen.findByLabelText('API Key');
+  rtl.fireEvent.change(input, { target: { value: 'fresh-key' } });
+  rtl.fireEvent.submit(input.closest('form')!);
+
+  const alert = await rtl.screen.findByRole('alert');
+  assert.match(alert.textContent ?? '', /did not keep the session cookie/);
+  assert.ok(rtl.screen.getByLabelText('API Key'));
+  assert.equal(sessionStorage.getItem(ROLE_KEY), null);
+  assert.equal(sessionStorage.getItem(ACTOR_ID_KEY), null);
+  // The startup check, the exchange and its confirmation: no dashboard request, no second attempt.
+  assert.deepEqual(
+    fetchCalls.map(c => `${c.method} ${c.path}`),
+    ['GET /api/auth/session', 'POST /api/auth/session', 'GET /api/auth/session'],
+  );
 });
 
 test('a fresh sign-in with a role-less session response still degrades to viewer', async () => {

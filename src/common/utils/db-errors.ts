@@ -1,4 +1,5 @@
-import { QueryFailedError } from 'typeorm';
+import { DatabaseError } from 'pg';
+import { type DataSource, QueryFailedError } from 'typeorm';
 
 /** Structural view of the driver errors these predicates classify, so classification survives realms. */
 type DriverErrorShape = { code?: string; message?: string };
@@ -15,6 +16,34 @@ function isNamedError(err: unknown, name: string): err is DriverErrorWrapperShap
 
 function isQueryFailedErrorLike(err: unknown): err is DriverErrorWrapperShape {
   return err instanceof QueryFailedError || isNamedError(err, 'QueryFailedError');
+}
+
+/** What a PostgreSQL data connection failed to connect with (see markConnectFailures). */
+const connectFailures = new WeakSet<object>();
+
+/**
+ * Marks every error the data connection fails to hand out a connection with. A refused or timed-out socket, or the
+ * pool's own connect timeout, reaches the caller as a plain error that names no database, the shape a Redis or S3
+ * client raises too, so it is marked where the connection is acquired.
+ */
+export function markConnectFailures(dataSource: DataSource): void {
+  const driver = dataSource.driver as unknown as { obtainMasterConnection(): Promise<unknown> };
+  const obtain = driver.obtainMasterConnection.bind(driver);
+  driver.obtainMasterConnection = () =>
+    obtain().catch((error: unknown) => {
+      if (typeof error === 'object' && error !== null) connectFailures.add(error);
+      throw error;
+    });
+}
+
+/**
+ * Whether an error came from a database rather than another dependency: a statement that failed (TypeORM wraps every
+ * statement's failure, on both dialects), PostgreSQL refusing a connection, which reaches the caller unwrapped, or a
+ * connection the data connection could not open. A closed WhatsApp, Redis or browser connection says "connection"
+ * too, so a caller that cannot see which call failed asks this before reading an error as the database being away.
+ */
+export function isDatabaseError(err: unknown): boolean {
+  return isQueryFailedErrorLike(err) || err instanceof DatabaseError || connectFailures.has(err as object);
 }
 
 /**
@@ -77,15 +106,37 @@ export function isMissingTableError(err: unknown): boolean {
 const TRANSIENT_DB_CODES = new Set(['SQLITE_BUSY', 'SQLITE_LOCKED', '57P01', '57P03', '53300']);
 
 /**
+ * Socket codes saying the database's host cannot be reached now: a name that does not resolve, no route to the host
+ * or its network, a connection aborted or broken. Read only on an error that is the database's (a failed statement, or
+ * the data connection failing to connect), since a webhook target or an engine raises the same codes.
+ */
+const UNREACHABLE_HOST_CODES = new Set([
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EHOSTDOWN',
+  'ENETDOWN',
+  'ECONNABORTED',
+  'EPIPE',
+]);
+
+/**
  * A database failure worth one retry: the database or its pool said "not now" (lock contention, a
- * dropped connection, pg-pool's connection timeout), not a rejected statement. A unique violation is
- * never transient: callers read it as the dedup oracle.
+ * dropped connection, pg-pool's connection timeout, a host it cannot reach), not a rejected statement. A
+ * unique violation is never transient: callers read it as the dedup oracle.
  */
 export function isTransientDbError(err: unknown): boolean {
   if (err == null || typeof err !== 'object' || isUniqueViolation(err)) return false;
   const e = err as DriverErrorWrapperShape;
   const code = e.driverError?.code ?? e.code;
   if (typeof code === 'string' && TRANSIENT_DB_CODES.has(code)) return true;
+  if (
+    typeof code === 'string' &&
+    UNREACHABLE_HOST_CODES.has(code) &&
+    (isQueryFailedErrorLike(err) || connectFailures.has(err))
+  )
+    return true;
   return /connection|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|terminating connection|timeout exceeded when trying to connect/i.test(
     typeof e.message === 'string' ? e.message : '',
   );

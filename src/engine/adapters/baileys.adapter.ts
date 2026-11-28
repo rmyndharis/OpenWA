@@ -6,7 +6,8 @@ import type { GroupMetadata, WASocket } from '@whiskeysockets/baileys';
 import { BaileysChannels } from './baileys-channels';
 import { BaileysCatalog } from './baileys-catalog';
 import { BaileysContacts } from './baileys-contacts';
-import { BaileysEvents, type GroupMember } from './baileys-events';
+import { BaileysEvents, keptInboundRaw, revivedInbound, type GroupMember, type StoredChange } from './baileys-events';
+import { isDatabaseUnavailable } from '../../common/utils/recovery-queue';
 import { BaileysGroups } from './baileys-groups';
 import { BaileysHistory, toUnixSeconds } from './baileys-history';
 import { type BaileysEngineHost } from './baileys-host';
@@ -178,7 +179,17 @@ export class BaileysAdapter implements IWhatsAppEngine {
         type,
         accept?: Parameters<BaileysSessionStore['recordMessageEdit']>[4],
       ) => this.sessionStore.recordMessageEdit(chatId, messageId, text, type, accept),
-      putStoredMessage: msg => this.config.messageStore?.put(this.config.dbSessionId, msg),
+      // A copy the database could not take is kept to be written once it answers (see restoreStoredCopy): a later edit,
+      // reaction, vote or RSVP of the message is read with the secret it holds.
+      putStoredMessage: msg =>
+        this.config.messageStore?.put(this.config.dbSessionId, msg).catch((error: unknown) => {
+          const lib = this.lifecycle.loadedLib;
+          const callback = this.callbacks.onStoredCopyRefused;
+          if (lib && callback && msg.key.id && isDatabaseUnavailable(error)) {
+            callback({ messageId: msg.key.id, raw: keptInboundRaw(lib, msg) });
+          }
+          throw error;
+        }),
       updateStoredMessage: (messageId, change) =>
         this.config.messageStore?.update(this.config.dbSessionId, messageId, change),
       removeStoredMessage: (messageId, shouldRemove) =>
@@ -216,6 +227,25 @@ export class BaileysAdapter implements IWhatsAppEngine {
       forgetGroupMetadata: groupId => this.lifecycle.groupMetadata.invalidate(groupId),
       getEphemeralExpiration: chatId => this.sessionStore.getEphemeralExpiration(chatId),
       getStoredMessage: messageId => this.config.messageStore?.getMessage(this.config.dbSessionId, messageId),
+      keepUnreadInbound: (msg, targetId) => {
+        const lib = this.lifecycle.loadedLib;
+        const callback = this.callbacks.onInboundUnreadable;
+        if (!lib || !callback || !msg.key.id) return;
+        callback({ messageId: msg.key.id, raw: keptInboundRaw(lib, msg), ...(targetId ? { targetId } : {}) });
+      },
+      isChangeKept: targetId => this.callbacks.isChangeKept?.(targetId) === true,
+      isStoredCopyKept: messageId => this.callbacks.isStoredCopyKept?.(messageId) === true,
+      onStoredAccountCleared: () => this.callbacks.onStoredAccountCleared?.(),
+      onStoredAccountWipeRefused: before =>
+        this.callbacks.onStoredAccountWipeRefused?.({ raw: JSON.stringify({ before: before.toISOString() }) }),
+      keepStoredChange: (messageId, changeId, change) =>
+        this.callbacks.onStoredChangeRefused?.({
+          messageId,
+          changeId,
+          raw: JSON.stringify({ messageId, change }),
+          kind: change.kind,
+        }),
+      noteUnreadStoredMessage: key => delegates.events?.noteUnreadStoredMessage(key),
       getStoredMessages: messageIds => this.config.messageStore?.getMessages(this.config.dbSessionId, messageIds),
       recordLidMapping: (lid, pn, isReported = true) =>
         this.sessionStore.addLidMappings([{ lid: `${lid.split('@')[0].split(':')[0]}@lid`, pn }], isReported),
@@ -345,6 +375,32 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return this.lifecycle.getPushName();
   }
 
+  /** A message kept because a stored message it needs could not be read, handed back (see InboundRedelivery). */
+  async redeliverInbound(raw: string): Promise<boolean> {
+    // Read as on arrival, which needs the session connected (an RSVP is read with the account's own id).
+    if (this.getStatus() !== EngineStatus.READY) return false;
+    const lib = await this.lifecycle.loadLib();
+    await this.events.redeliverInbound(revivedInbound(lib, raw));
+    return true;
+  }
+
+  /** An edit or delete of a stored copy the database refused, applied once it answers (see InboundRedelivery). */
+  async restoreStoredChange(raw: string): Promise<boolean> {
+    const { messageId, change } = JSON.parse(raw) as { messageId: string; change: StoredChange };
+    await this.events.restoreStoredChange(messageId, change);
+    return true;
+  }
+
+  /** A copy of a message the database refused, written once it answers (see InboundRedelivery). */
+  async restoreStoredCopy(raw: string, revoked: boolean): Promise<boolean> {
+    const store = this.config.messageStore;
+    if (!store) return true;
+    const msg = revivedInbound(await this.lifecycle.loadLib(), raw);
+    const deleted = revoked || (!!msg.key.id && this.events.wasDeletedForEveryone(msg.key.id));
+    await store.put(this.config.dbSessionId, deleted ? { ...msg, message: null } : msg);
+    return true;
+  }
+
   // ----- Messaging -----
 
   async sendTextMessage(
@@ -404,8 +460,14 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return this.messaging.sendPollMessage(chatId, poll);
   }
 
-  async replyToMessage(chatId: string, quotedMsgId: string, text: string, mentions?: string[]): Promise<MessageResult> {
-    return this.messaging.replyToMessage(chatId, quotedMsgId, text, mentions);
+  async replyToMessage(
+    chatId: string,
+    quotedMsgId: string,
+    text: string,
+    mentions?: string[],
+    options?: { quotedChatId?: string },
+  ): Promise<MessageResult> {
+    return this.messaging.replyToMessage(chatId, quotedMsgId, text, mentions, options);
   }
 
   async forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult> {
@@ -416,7 +478,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return this.messaging.reactToMessage(chatId, messageId, emoji);
   }
 
-  async deleteMessage(chatId: string, messageId: string, forEveryone = true): Promise<void> {
+  async deleteMessage(chatId: string, messageId: string, forEveryone = true): Promise<{ engineChatId: string }> {
     return this.messaging.deleteMessage(chatId, messageId, forEveryone);
   }
 

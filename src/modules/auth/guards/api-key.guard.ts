@@ -31,6 +31,7 @@ import {
   HEADER_AUTH_ONLY_KEY,
   CAPABILITIES_KEY,
   CAPABILITY_AGNOSTIC_KEY,
+  SIGNED_OUT_PROBE_KEY,
   UNRESTRICTED_KEY,
   ChatScopeKind,
 } from '../decorators/auth.decorators';
@@ -73,7 +74,10 @@ export class ApiKeyGuard implements CanActivate {
       // Record rejected/denied authentication attempts so the audit log has a forensic trail for
       // credential probing. Fire-and-forget: audit logging is best-effort and must never turn a
       // 401/403 into a failure of the guard itself.
-      if (err instanceof UnauthorizedException || err instanceof ForbiddenException) {
+      if (
+        (err instanceof UnauthorizedException || err instanceof ForbiddenException) &&
+        !this.isSignedOutProbe(request, context)
+      ) {
         // Stamp at least the IP so the failed-auth audit row below is attributable even though the
         // key was never resolved. setRequestActor is a no-op outside a request scope.
         const clientIp = this.getClientIp(request);
@@ -323,6 +327,19 @@ export class ApiKeyGuard implements CanActivate {
         throw new ForbiddenException('API key is restricted to selected chats');
       }
     }
+  }
+
+  /**
+   * A request to a @SignedOutProbe route that presents no credential, read as authorize() reads one:
+   * no API key header and no non-empty session cookie. Its refusal is not audited, nor charged to the
+   * client's unresolved-rejection budget.
+   */
+  private isSignedOutProbe(request: Request, context: ExecutionContext): boolean {
+    return (
+      !this.extractApiKey(request) &&
+      !extractBrowserSessionCookie(request.headers?.cookie) &&
+      !!this.reflector.getAllAndOverride<boolean>(SIGNED_OUT_PROBE_KEY, [context.getHandler(), context.getClass()])
+    );
   }
 
   private extractApiKey(request: Request): string | undefined {

@@ -36,6 +36,7 @@ import { HookManager } from '../../core/hooks';
 import { SessionLifecycleFences } from './session-lifecycle-fences';
 import { SessionStatusBroadcaster } from './session-status-broadcaster';
 import type { MessageProjector } from './message-projector.service';
+import { STOP_MOVES, type SessionRows } from './session-row-park';
 import { sessionNotFound } from './session-id.pipe';
 // The two pure config resolvers stay exported from the lifecycle module (its export surface is
 // unchanged — session.service re-exports them from there), so this unit imports them back. The
@@ -291,6 +292,8 @@ export interface SessionEngineControlsHost {
   dataSource(): DataSource;
   fences: SessionLifecycleFences;
   broadcaster: SessionStatusBroadcaster;
+  /** Where a session row write the database refused is kept until it answers. */
+  rows?: SessionRows;
   cancelReconnect(id: string): void;
   initializeEngine(id: string, session: Session): Promise<void>;
   isSessionRetired(id: string): Promise<boolean>;
@@ -385,10 +388,12 @@ export class SessionEngineControls {
 
   /** findOne-or-404 with the runtime-state projection, mirroring SessionService.findOne. */
   private async requireSession(id: string): Promise<Session> {
+    const mark = this.host.rows?.mark(id) ?? 0;
     const session = await this.sessionRepository.findOne({ where: { id } });
     if (!session) {
       throw sessionNotFound(id);
     }
+    this.host.rows?.saw(id, session, mark);
     return this.sessionRestrictions.attachTo(this.sessionErrors.attachTo(session));
   }
 
@@ -451,7 +456,8 @@ export class SessionEngineControls {
       // An operator's stop outranks any start but POST /start, so this refuses boot auto-start and
       // the takeover sweep, which pick their rows once and launch them seconds apart, when a stop
       // landed after that read. A delete's record ('deleting') counts as one.
-      if (session.desiredState && !explicit) {
+      // So does a stop the database refused to record, kept until it answers.
+      if ((session.desiredState || this.host.rows?.keptStop(id)) && !explicit) {
         throw new SessionStoppedException(`Session ${id} was stopped`);
       }
 
@@ -540,11 +546,22 @@ export class SessionEngineControls {
       if (this.host.isClosed()) {
         throw closedRefusal();
       }
-      if (!(await this.host.prepareStart(id, desiredState))) {
+      // The clear below is the operator's word over a stop kept before it, not one kept while it runs.
+      const live = this.host.rows?.begin(id, 'desiredState');
+      if (live?.wait) await live.wait;
+      const stopKept = this.host.rows?.kept(id, 'desiredState');
+      let cleared: boolean;
+      try {
+        cleared = await this.host.prepareStart(id, desiredState);
+      } finally {
+        live?.end();
+      }
+      if (!cleared) {
         await this.requireSession(id);
         this.stoppingSessions.add(id);
         throw new SessionStoppedException(`Session ${id} was stopped`);
       }
+      this.host.rows?.landed(id, 'desiredState', null, stopKept);
       // The clear stands, but a shutdown during the write must not let the hook run.
       if (this.host.isClosed()) {
         throw closedRefusal();
@@ -729,14 +746,26 @@ export class SessionEngineControls {
             { id, nodeId },
             { id, nodeId: IsNull() },
           ];
+    const live = this.host.rows?.begin(id, 'status');
+    if (live?.wait) await live.wait;
+    const superseded = this.host.rows?.kept(id, 'status');
     try {
       const { affected } = await this.sessionRepository.update(ours, { status: SessionStatus.DISCONNECTED });
-      if (affected) this.broadcaster.announce(id, SessionStatus.DISCONNECTED);
+      live?.end();
+      if (affected) {
+        this.host.rows?.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
+        this.broadcaster.announce(id, SessionStatus.DISCONNECTED);
+      }
     } catch (error) {
+      this.host.rows?.keepSet(id, 'status', SessionStatus.DISCONNECTED, error, {
+        owners: this.host.rows?.owners(),
+      });
       this.logger.warn('Failed to persist the disconnected status of a retired launch', {
         sessionId: id,
         error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      live?.end();
     }
   }
 
@@ -917,7 +946,24 @@ export class SessionEngineControls {
               { id, nodeId },
               { id, nodeId: IsNull() },
             ];
-      const clearPhone = (): Promise<unknown> => this.sessionRepository.update(phoneWhere, { phone: null });
+      // A clear the database refuses is kept and written once it answers, and the logout still fails.
+      const clearPhone = async (): Promise<unknown> => {
+        const live = this.host.rows?.begin(id, 'phone');
+        if (live?.wait) await live.wait;
+        const superseded = this.host.rows?.kept(id, 'phone');
+        try {
+          const result = await this.sessionRepository.update(phoneWhere, { phone: null });
+          live?.end();
+          const landed = (result as { affected?: number } | undefined)?.affected !== 0;
+          if (landed) this.host.rows?.landed(id, 'phone', null, superseded);
+          return result;
+        } catch (error) {
+          this.host.rows?.keepSet(id, 'phone', null, error, { owners: this.host.rows?.owners() });
+          throw error;
+        } finally {
+          live?.end();
+        }
+      };
       await (this.host.writePhone?.(id, clearPhone) ?? clearPhone());
       await this.host.updateStatus(id, SessionStatus.DISCONNECTED, { allowUnowned: true });
     } finally {
@@ -987,16 +1033,19 @@ export class SessionEngineControls {
     // A force-kill is a stop too: the session stays down across restarts and takeover until an
     // explicit start. Recorded only once there is an engine to kill, and before the teardown, so a
     // POST /start that lands after the eviction clears it and stands. A failed write must not keep a
-    // wedged engine alive, so it is logged and the kill goes on.
+    // wedged engine alive, so it is logged and the kill goes on; one the database refused is kept and
+    // recorded once it answers.
     const write = (): Promise<unknown> =>
       hooks.recordStop ? hooks.recordStop() : this.sessionRepository.update(id, { desiredState: 'stopped' });
-    await write().catch((error: unknown) =>
+    await write().catch((error: unknown) => {
+      const stop = { field: 'desiredState' as const, moves: STOP_MOVES, owners: this.host.rows?.owners() };
+      this.host.rows?.keep(id, stop, error);
       this.logger.error(
         'Failed to record the force-kill as a stop',
         error instanceof Error ? error.message : String(error),
         { sessionId: id, action: 'force_kill_keep_down_failed' },
-      ),
-    );
+      );
+    });
 
     // Announced by the write below rather than from the engine callback, as in stop().
     this.operatorTeardowns.set(id, engine);

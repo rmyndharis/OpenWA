@@ -1,6 +1,7 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 import { dateColumnType, jsonColumnType } from '../../../common/utils/column-types';
 import { DateTransformer } from '../../../common/transformers/date.transformer';
+import type { MessageEngineRef } from '../../message/entities/message.entity';
 
 // pending: recorded before dispatch; queued: BullMQ owns the current job.
 // Both retain replay data. The worker settles queued rows after success or durable failure.
@@ -49,6 +50,15 @@ export class WebhookOutboxEvent {
 
   @Column({ type: 'varchar', nullable: true })
   state!: WebhookOutboxState | null;
+
+  /**
+   * The chat, direction and author the engine reported for the message a delivery carries, kept only when a
+   * `message:received` or `message:sent` handler filed it under others or rewrote its `from` or `to` (the rule for
+   * messages.engineRef). A change of the message reaches the copy by it, also when the message has no row (a send
+   * that is not stored), never by the chat the handler chose. Never selected by default.
+   */
+  @Column({ type: jsonColumnType(), nullable: true, select: false })
+  engineRef?: MessageEngineRef | null;
 
   @Column({ type: 'int', default: 0 })
   attempts!: number;

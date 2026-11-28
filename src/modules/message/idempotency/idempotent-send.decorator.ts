@@ -7,7 +7,8 @@ export const IDEMPOTENCY_KEY_HEADER_DESCRIPTION =
   'the first response (marked `Idempotent-Replayed: true`) instead of sending again. 1-255 visible ' +
   'ASCII characters, unique per session. While the first request runs a retry gets 409 ' +
   '`IDEMPOTENCY_KEY_IN_PROGRESS`; after a failure that may have sent the message it gets 409 ' +
-  '`IDEMPOTENCY_OUTCOME_UNKNOWN`. A 4xx or 501 refusal before the engine call frees the key. ' +
+  '`IDEMPOTENCY_OUTCOME_UNKNOWN`. A 4xx or 501 refusal, or a 503 the database answered, before the engine call ' +
+  'frees the key. ' +
   'Errors from an engine send keep it taken whatever their HTTP status, including 409, unless the engine ' +
   'proves that nothing was sent: a transport failure or a not-ready 409 before the message was handed over ' +
   '(the session not ready, WhatsApp Web reloading its page, or a Baileys connection replaced or stopped ' +

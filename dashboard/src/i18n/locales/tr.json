@@ -389,6 +389,7 @@
     "connecting": "Bağlanıyor...",
     "invalidKey": "Geçersiz API anahtarı",
     "connectionError": "Sunucuya bağlanılamadı. Lütfen tekrar deneyin.",
+    "sessionNotKept": "Anahtar kabul edildi, ancak bu tarayıcı oturum çerezini saklamadı. Kontrol paneli ile API aynı sitede olmalı ya da aynı kaynaktan (origin) sunulmalıdır.",
     "help": "Yardıma mı ihtiyacınız var?",
     "viewDocs": "Dokümantasyonu Görüntüle",
     "footer": "Yudhi Armyndharis ve OpenWA Topluluğu tarafından ❤️ ile yapılmıştır",
@@ -1280,11 +1281,13 @@
       "exportFailed": "Veriler dışa aktarılamadı",
       "exportPartialTitle": "Yedekte bazı medyalar eksik",
       "exportPartial": "{{count}} ek veri yükü dışa aktarma medya sınırını aştı ve yer tutucu olarak kaydedildi. Mesajlar geri yüklenir; ancak medyaları yüklenmez.",
+      "exportIncomplete": "İndirme, yedekleme tamamlanmadan sona erdi; hiçbir şey kaydedilmedi. Tekrar deneyin.",
       "importFailed": "Veriler içe aktarılamadı",
       "importOk": "Veriler içe aktarıldı",
       "importConfirm": "İçe aktarma işlemi mevcut tüm verileri yedekle ({{rows}} satır) DEĞİŞTİRECEKTİR. Bu işlem geri alınamaz. Devam edilsin mi?",
       "invalidFile": "Bu dosya geçerli bir OpenWA veri yedeği değil.",
-      "importTooLarge": "Yedekleme, istek sınırı için çok büyük. Sunucudaki BODY_SIZE_LIMIT değerini artırın ve tekrar deneyin."
+      "importTooLarge": "Yedekleme, istek sınırı için çok büyük. Sunucudaki BODY_SIZE_LIMIT değerini artırın ve tekrar deneyin.",
+      "importStopped": "Sunucu içe aktarma sırasında durdu ve işlemi geri aldı, verileriniz değişmedi. Sunucu yeniden çalıştığında aynı dosyayı tekrar içe aktarın."
     },
     "restart": {
       "idleTitle": "Yapılandırma kaydedildi",

@@ -389,6 +389,7 @@
     "connecting": "Verbindung wird hergestellt...",
     "invalidKey": "Ungültiger API-Schlüssel",
     "connectionError": "Verbindung zum Server nicht möglich. Bitte versuche es erneut.",
+    "sessionNotKept": "Der Schlüssel wurde akzeptiert, aber dieser Browser hat das Sitzungs-Cookie nicht gespeichert. Dashboard und API müssen auf derselben Website liegen oder vom selben Origin ausgeliefert werden.",
     "help": "Brauchst du Hilfe?",
     "viewDocs": "Dokumentation ansehen",
     "footer": "Mit ❤️ erstellt von Yudhi Armyndharis und der OpenWA-Community",
@@ -1280,11 +1281,13 @@
       "exportFailed": "Daten konnten nicht exportiert werden",
       "exportPartialTitle": "In der Sicherung fehlen einige Medien",
       "exportPartial": "Anhänge über dem Medienbudget des Exports: {{count}}. Sie wurden als Platzhalter gespeichert. Die Nachrichten werden wiederhergestellt, ihre Medien nicht.",
+      "exportIncomplete": "Der Download endete, bevor die Sicherung vollständig war. Es wurde nichts gespeichert. Versuche es erneut.",
       "importFailed": "Daten konnten nicht importiert werden",
       "importOk": "Daten wurden importiert",
       "importConfirm": "Beim Import werden alle aktuellen Daten durch die Sicherung ERSETZT ({{rows}} Zeilen). Dies kann nicht rückgängig gemacht werden. Fortfahren?",
       "invalidFile": "Diese Datei ist keine gültige OpenWA-Datensicherung.",
-      "importTooLarge": "Die Sicherung ist für das Anfragelimit zu groß. Erhöhe BODY_SIZE_LIMIT auf dem Server und versuche es erneut."
+      "importTooLarge": "Die Sicherung ist für das Anfragelimit zu groß. Erhöhe BODY_SIZE_LIMIT auf dem Server und versuche es erneut.",
+      "importStopped": "Der Server wurde während des Imports beendet und hat ihn zurückgesetzt, deine Daten sind unverändert. Importiere dieselbe Datei erneut, sobald der Server wieder läuft."
     },
     "restart": {
       "idleTitle": "Konfiguration gespeichert",

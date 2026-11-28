@@ -3,6 +3,8 @@ process.env.MCP_ENABLED = 'true';
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { type INestApplication } from '@nestjs/common';
+import { DatabaseError } from 'pg';
+import { QueryFailedError } from 'typeorm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
@@ -309,6 +311,53 @@ describe('MCP server (e2e)', () => {
       expect(chats).not.toHaveBeenCalled();
     } finally {
       chats.mockRestore();
+    }
+  });
+
+  // The mount answers in JSON-RPC itself, so a database that cannot answer keeps the error body it has always had
+  // there rather than the REST 503.
+  it('keeps the tool result of a tool whose database refused the connection', async () => {
+    const refused = Object.assign(
+      new DatabaseError('database "openwa" is not currently accepting connections', 118, 'error'),
+      { severity: 'FATAL', code: '55000' },
+    );
+    const list = jest.spyOn(app.get(SessionService), 'listChats').mockRejectedValueOnce(refused);
+    try {
+      const res = await request(app.getHttpServer())
+        .post('/mcp')
+        .set(MCP_HEADERS)
+        .set('X-API-Key', viewerKey)
+        .send(jsonRpcRequest('tools/call', { name: 'SessionGetChats', arguments: { sessionId: scopedSession } }));
+
+      expect(res.status).toBe(200);
+      const result = parseMcpResponse(res).result as { isError: boolean; content: Array<{ text: string }> };
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content[0].text)).toEqual({ success: false, name: 'error', message: 'Internal error' });
+      expect(list).toHaveBeenCalled();
+    } finally {
+      list.mockRestore();
+    }
+  });
+
+  it('keeps the JSON-RPC 500 of a key the locked database could not check', async () => {
+    const locked = new QueryFailedError(
+      'SELECT 1',
+      [],
+      Object.assign(new Error('database is locked'), { name: 'SqliteError', code: 'SQLITE_BUSY' }),
+    );
+    const validate = jest.spyOn(app.get(AuthService), 'validateApiKey').mockRejectedValueOnce(locked);
+    try {
+      const res = await request(app.getHttpServer())
+        .post('/mcp')
+        .set(MCP_HEADERS)
+        .set('X-API-Key', viewerKey)
+        .send(jsonRpcRequest('tools/list'));
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null });
+      expect(validate).toHaveBeenCalled();
+    } finally {
+      validate.mockRestore();
     }
   });
 });

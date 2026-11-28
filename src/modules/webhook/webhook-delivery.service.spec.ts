@@ -27,6 +27,7 @@ import * as crypto from 'crypto';
 import { fetch as undiciFetch } from 'undici';
 import { WebhookDeliveryService, WebhookPayload, WebhookJobData } from './webhook-delivery.service';
 import { WebhookOutboxService } from './webhook-outbox.service';
+import { dataHash } from './utils/deliver-once';
 import { Webhook } from './entities/webhook.entity';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
 import { Session } from '../session/entities/session.entity';
@@ -84,6 +85,14 @@ describe('WebhookDeliveryService', () => {
     close: jest.Mock;
     markQueued: jest.Mock;
     markPending: jest.Mock;
+    currentMessagePayload: jest.Mock;
+    isMessageHeld: jest.Mock;
+    queuedUnwritten: jest.Mock;
+    hasUnwritten: jest.Mock;
+    onQueuedCopyChanged: jest.Mock;
+    queuedCopiesOf: jest.Mock;
+    holdMessage: jest.Mock;
+    messageHold: jest.Mock;
   };
   let insertedFailures: Array<Partial<WebhookDeliveryFailure>>;
 
@@ -192,6 +201,15 @@ describe('WebhookDeliveryService', () => {
       close: jest.fn().mockResolvedValue(undefined),
       markQueued: jest.fn().mockResolvedValue(undefined),
       markPending: jest.fn().mockResolvedValue(undefined),
+      // No outbox row of a message delivery unless a test says otherwise: a delivery sends what it holds.
+      currentMessagePayload: jest.fn().mockResolvedValue(undefined),
+      isMessageHeld: jest.fn().mockReturnValue(false),
+      queuedUnwritten: jest.fn(),
+      hasUnwritten: jest.fn().mockReturnValue(false),
+      onQueuedCopyChanged: jest.fn(),
+      queuedCopiesOf: jest.fn().mockReturnValue([]),
+      holdMessage: jest.fn(),
+      messageHold: jest.fn().mockReturnValue(undefined),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -2088,6 +2106,289 @@ describe('WebhookDeliveryService', () => {
       return queueModule.get<WebhookDeliveryService>(WebhookDeliveryService);
     };
 
+    // A copy the journal restored for a queued delivery is read by that job only: once the job is gone, nothing will.
+    it.each([
+      ['no longer in Redis', () => Promise.resolve(null), true],
+      ['finished', () => Promise.resolve({ getState: () => Promise.resolve('completed') }), true],
+      ['given up on', () => Promise.resolve({ getState: () => Promise.resolve('failed') }), true],
+      ['still waiting', () => Promise.resolve({ getState: () => Promise.resolve('delayed') }), false],
+      ['unknown while Redis cannot answer', () => Promise.reject(new Error('connection is closed')), false],
+    ] as const)('drops at start a restored copy whose job is %s: %s', async (_label, getJob, dropped) => {
+      const restored = jest.fn().mockReturnValue([{ webhookId: 'wh-1', idempotencyKey: 'k', deliveryId: 'd' }]);
+      const forget = jest.fn();
+      Object.assign(outboxService, { queuedCopies: restored, forgetUnwritten: forget });
+      webhookQueue.getJob = jest.fn(getJob as () => Promise<unknown>);
+      const queueService = await buildQueueService((key: string, def?: unknown) =>
+        key === 'queue.enabled' ? true : def,
+      );
+
+      queueService.onApplicationBootstrap();
+      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(webhookQueue.getJob).toHaveBeenCalledWith('d');
+      expect(forget.mock.calls).toEqual(dropped ? [['wh-1', 'k']] : []);
+    });
+
+    // A worker of another node has no copy of a job this node queued with no outbox row: the job tells it instead.
+    describe('what a job queued with no outbox row is told by the node that queued it', () => {
+      let job: { data: Record<string, unknown>; getState: jest.Mock; updateData: jest.Mock };
+      // The lease keys the node writes in Redis, which Redis expires itself.
+      let redis: { set: jest.Mock; del: jest.Mock };
+      const queueOn = (key: string, def?: unknown) => (key === 'queue.enabled' ? true : def);
+      const leased = (): unknown[] => redis.set.mock.calls.map(([key, , options]) => [key, options] as unknown);
+      const lease = ['bull:webhook:held:d', { PX: 60_000 }];
+      const written = (): Array<Record<string, unknown>> =>
+        job.updateData.mock.calls.map(([data]) => data as Record<string, unknown>);
+      const listener = (): ((id: string, data: unknown, lost?: 'kept' | 'taken') => void) =>
+        (
+          outboxService.onQueuedCopyChanged.mock.calls as Array<
+            [(id: string, data: unknown, lost?: 'kept' | 'taken') => void]
+          >
+        )[0][0];
+
+      beforeEach(() => {
+        job = {
+          data: { webhookId: 'wh-1', unwritten: { id: 'M-1' } },
+          getState: jest.fn().mockResolvedValue('delayed'),
+          updateData: jest.fn().mockImplementation((data: Record<string, unknown>) => {
+            job.data = data;
+            return Promise.resolve();
+          }),
+        };
+        webhookQueue.getJob = jest.fn().mockResolvedValue(job);
+        redis = { set: jest.fn().mockResolvedValue('OK'), del: jest.fn().mockResolvedValue(1) };
+        Object.assign(webhookQueue, {
+          toKey: (type: string) => `bull:webhook:${type}`,
+          getBackend: () => ({ client: Promise.resolve(redis) }),
+        });
+        outboxService.queuedCopiesOf.mockReturnValue([['d', false]]);
+        jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+      });
+
+      afterEach(() => jest.useRealTimers());
+
+      it('writes the copy as a change left it, and again at the next renewal when Redis did not answer', async () => {
+        const service = await buildQueueService(queueOn);
+        const changed = listener();
+        webhookQueue.getJob.mockRejectedValueOnce(new Error('connection is closed'));
+
+        changed('d', null);
+        await jest.advanceTimersByTimeAsync(0);
+        expect(job.updateData).not.toHaveBeenCalled();
+        await jest.advanceTimersByTimeAsync(20_000);
+
+        expect(written()).toEqual([expect.objectContaining({ unwritten: { id: 'M-1' }, unwrittenChange: null })]);
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(job.updateData).toHaveBeenCalledTimes(1);
+        await service.onModuleDestroy();
+      });
+
+      it('writes that a bound dropped the copy, then that a change of its message came after', async () => {
+        const service = await buildQueueService(queueOn);
+        const changed = listener();
+
+        changed('d', null, 'kept');
+        await jest.advanceTimersByTimeAsync(0);
+        changed('d', null, 'taken');
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(written()).toEqual([
+          expect.objectContaining({ unwritten: { id: 'M-1' }, unwrittenLost: 'kept' }),
+          expect.objectContaining({ unwrittenLost: 'taken' }),
+        ]);
+        expect(written()[1]).not.toHaveProperty('unwrittenChange');
+        await service.onModuleDestroy();
+      });
+
+      it('holds the job while a change of the message is kept, renewing the lease, and lets it go after', async () => {
+        const service = await buildQueueService(queueOn);
+
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        await jest.advanceTimersByTimeAsync(0);
+        expect(leased()).toEqual([lease]);
+        await jest.advanceTimersByTimeAsync(20_000);
+        expect(leased()).toEqual([lease, lease]);
+        // The job's own data holds no hold: a worker asks Redis for the lease.
+        expect(job.updateData).not.toHaveBeenCalled();
+
+        service.holdMessage('sess-1', 'M-1', false);
+        await jest.advanceTimersByTimeAsync(0);
+        expect(redis.del).toHaveBeenCalledWith('bull:webhook:held:d');
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(leased()).toHaveLength(2);
+        expect(redis.del).toHaveBeenCalledTimes(1);
+        await service.onModuleDestroy();
+      });
+
+      it('writes nothing into a job that is gone or already settled', async () => {
+        const service = await buildQueueService(queueOn);
+        const changed = listener();
+
+        job.getState.mockResolvedValueOnce('completed');
+        changed('d', null);
+        await jest.advanceTimersByTimeAsync(0);
+        webhookQueue.getJob.mockResolvedValueOnce(null);
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        await jest.advanceTimersByTimeAsync(40_000);
+
+        expect(job.updateData).not.toHaveBeenCalled();
+        expect(redis.set).not.toHaveBeenCalled();
+        expect(redis.del).toHaveBeenCalledWith('bull:webhook:held:d');
+        await service.onModuleDestroy();
+      });
+
+      it('lets the hold go by the message, though this node dropped the copy since', async () => {
+        const service = await buildQueueService(queueOn);
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        await jest.advanceTimersByTimeAsync(0);
+        outboxService.queuedCopiesOf.mockReturnValue([]);
+
+        service.holdMessage('sess-1', 'M-1', false);
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(redis.del).toHaveBeenCalledWith('bull:webhook:held:d');
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(leased()).toEqual([lease]);
+        await service.onModuleDestroy();
+      });
+
+      it("holds an edit event's job only while a revoke of the message is kept, as this node's own hold does", async () => {
+        outboxService.queuedCopiesOf.mockReturnValue([['e', true]]);
+        const service = await buildQueueService(queueOn);
+
+        service.holdMessage('sess-1', 'M-1', 'copies');
+        await jest.advanceTimersByTimeAsync(0);
+        expect(redis.set).not.toHaveBeenCalled();
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(leased()).toEqual([['bull:webhook:held:e', { PX: 60_000 }]]);
+        await service.onModuleDestroy();
+      });
+
+      it('writes nothing more for a hold that did not change, until its renewal', async () => {
+        const service = await buildQueueService(queueOn);
+
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        service.holdMessage('sess-1', 'M-1', 'copies');
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(leased()).toEqual([lease]);
+        await service.onModuleDestroy();
+      });
+
+      it('holds a job at once when it is queued while a change of its message is kept', async () => {
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.received'] })]);
+        (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+        outboxService.hasUnwritten.mockReturnValue(true);
+        outboxService.queuedUnwritten.mockReturnValue({ sessionId: 'sess-1', messageId: 'M-1' });
+        outboxService.messageHold.mockReturnValue('copies');
+        const service = await buildQueueService(queueOn);
+
+        await service.dispatch('sess-1', 'message.received', { id: 'M-1', chatId: '628111@c.us', body: 'hi' });
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(outboxService.messageHold).toHaveBeenCalledWith('sess-1', 'M-1');
+        expect(leased()).toEqual([lease]);
+        await service.onModuleDestroy();
+      });
+
+      it('writes again at start what a change left of a copy the journal restored', async () => {
+        Object.assign(outboxService, {
+          queuedCopies: jest.fn().mockReturnValue([
+            { webhookId: 'wh-1', idempotencyKey: 'k', deliveryId: 'd', change: null },
+            { webhookId: 'wh-1', idempotencyKey: 'k2', deliveryId: 'untouched' },
+            { webhookId: 'wh-1', idempotencyKey: 'k3', deliveryId: 'dropped', lost: 'kept' },
+          ]),
+        });
+        const service = await buildQueueService(queueOn);
+
+        service.onApplicationBootstrap();
+        await jest.advanceTimersByTimeAsync(0);
+
+        // One write for the copy a change reached, one for the copy a bound dropped; the other job is only checked.
+        expect(written()).toEqual([
+          expect.objectContaining({ unwrittenChange: null }),
+          expect.objectContaining({ unwrittenLost: 'kept' }),
+        ]);
+        expect(webhookQueue.getJob).toHaveBeenCalledWith('dropped');
+        await service.onModuleDestroy();
+      });
+
+      it('lets go of a job that failed for good, or that went between its read and its write', async () => {
+        const service = await buildQueueService(queueOn);
+        const changed = listener();
+        job.getState.mockResolvedValueOnce('failed');
+        changed('d', null);
+        await jest.advanceTimersByTimeAsync(0);
+        job.updateData.mockRejectedValueOnce(new Error('Missing key for job d. updateData'));
+        changed('d', null);
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(job.updateData).toHaveBeenCalledTimes(1);
+        await service.onModuleDestroy();
+      });
+
+      it('logs the writes Redis keeps refusing at most once a minute, with their count', async () => {
+        const service = await buildQueueService(queueOn);
+        const warn = jest
+          .spyOn((service as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn')
+          .mockImplementation(() => undefined);
+        webhookQueue.getJob.mockRejectedValue(new Error('connection is closed'));
+
+        listener()('d', null);
+        await jest.advanceTimersByTimeAsync(0);
+        await jest.advanceTimersByTimeAsync(20_000);
+        await jest.advanceTimersByTimeAsync(40_000);
+
+        const logged = warn.mock.calls.filter(
+          call => (call[1] as { action?: string } | undefined)?.action === 'webhook_job_mark_failed',
+        );
+        // The first, then the three since, a minute on.
+        expect(logged.map(call => (call[1] as { failures: number }).failures)).toEqual([1, 3]);
+        warn.mockRestore();
+        await service.onModuleDestroy();
+      });
+
+      it('leaves the jobs alone with the queue off', async () => {
+        const service = await buildQueueService(() => undefined);
+
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        await jest.advanceTimersByTimeAsync(20_000);
+
+        expect(outboxService.onQueuedCopyChanged).not.toHaveBeenCalled();
+        expect(webhookQueue.getJob).not.toHaveBeenCalled();
+        await service.onModuleDestroy();
+      });
+    });
+
+    it('drops, at a later check, a copy whose queued job Redis lost while the process runs', async () => {
+      const queued = jest.fn().mockReturnValue([]);
+      const forget = jest.fn();
+      Object.assign(outboxService, { queuedCopies: queued, forgetUnwritten: forget });
+      webhookQueue.getJob = jest.fn(() => Promise.resolve(null));
+      const queueService = await buildQueueService((key: string, def?: unknown) =>
+        key === 'queue.enabled' ? true : def,
+      );
+      jest.useFakeTimers();
+      try {
+        queueService.onApplicationBootstrap();
+        await jest.advanceTimersByTimeAsync(0);
+        expect(forget).not.toHaveBeenCalled();
+        queued.mockReturnValue([{ webhookId: 'wh-1', idempotencyKey: 'k', deliveryId: 'd' }]);
+
+        await jest.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+        expect(forget).toHaveBeenCalledWith('wh-1', 'k');
+        await queueService.onModuleDestroy();
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('enqueues a small, media-shed job when the event carries over-threshold media', async () => {
       const queueService = await buildQueueService((key: string, def?: unknown) => {
         if (key === 'queue.enabled') return true;
@@ -2181,6 +2482,102 @@ describe('WebhookDeliveryService', () => {
       }
       expect(webhookQueue.add).not.toHaveBeenCalled();
       expect(undiciFetch as unknown as jest.Mock).toHaveBeenCalledTimes(2);
+    });
+
+    describe("the hash of what a message delivery's outbox row holds", () => {
+      const message = { id: 'M-1', chatId: '628111@c.us', fromMe: false, type: 'text', body: 'first text' };
+      const edited = { ...message, body: 'edited text', edited: true };
+      const queuedJob = (): WebhookJobData =>
+        ((webhookQueue.add as jest.Mock).mock.calls as Array<[string, WebhookJobData]>)[0][1];
+      const queueService = (): Promise<WebhookDeliveryService> =>
+        buildQueueService((key: string, def?: unknown) => (key === 'queue.enabled' ? true : def));
+      const outbox = (): Record<string, jest.Mock> => outboxService as unknown as Record<string, jest.Mock>;
+
+      beforeEach(() => {
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.received'] })]);
+        (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+      });
+
+      it('goes with the job, taken from the data the dispatch wrote to the row', async () => {
+        await (await queueService()).dispatch('sess-1', 'message.received', message);
+
+        expect(queuedJob().baseHash).toBe(dataHash(message));
+      });
+
+      it("carries the message an edit event names before a hook rewrites the body's messageId", async () => {
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.edited'] })]);
+        (hookManager.execute as jest.Mock).mockImplementation((name: string, data: { payload: WebhookPayload }) =>
+          Promise.resolve(
+            name === 'webhook:before'
+              ? { continue: true, data: { ...data, payload: { ...data.payload, data: { messageId: 'renamed' } } } }
+              : { continue: true, data: {} },
+          ),
+        );
+
+        await (await queueService()).dispatch('sess-1', 'message.edited', { messageId: 'M-1', body: 'edited text' });
+
+        expect(queuedJob().payload.data).toEqual({ messageId: 'renamed' });
+        expect(queuedJob().messageId).toBe('M-1');
+      });
+
+      it.each([
+        ['a message delivery', 'message.received', message, true],
+        ['an edit event', 'message.edited', { messageId: 'M-1', chatId: '628111@c.us', body: 'edited text' }, true],
+        ['another event', 'group.join', { groupId: '1203@g.us' }, false],
+      ] as const)(
+        'carries the pre-hook data of %s whose outbox row could not be written: %s',
+        async (_label, event, data, carried) => {
+          (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: [event] })]);
+          outboxService.hasUnwritten.mockReturnValue(true);
+
+          await (await queueService()).dispatch('sess-1', event, data);
+
+          expect(queuedJob().unwritten).toEqual(carried ? expect.objectContaining(data) : undefined);
+        },
+      );
+
+      it('carries no pre-hook data when the outbox row was written', async () => {
+        await (await queueService()).dispatch('sess-1', 'message.received', message);
+
+        expect(queuedJob().unwritten).toBeUndefined();
+      });
+
+      it('is left out when the row under the key was opened by another dispatch', async () => {
+        outbox().openBatch = jest.fn().mockResolvedValue([]);
+
+        await (await queueService()).dispatch('sess-1', 'message.received', message);
+
+        expect(queuedJob().baseHash).toBeUndefined();
+      });
+
+      it.each([
+        ['the older data when the rewrite of the committed row fails', false, message],
+        ['the new data once the rewrite of the committed row lands', true, edited],
+      ])('names %s', async (_label, rewritten, held) => {
+        outbox().updatePendingPayload = jest.fn().mockResolvedValue(rewritten);
+        const service = await queueService();
+        const committed = await service.prepareDeliveries('sess-1', 'message.received', message);
+
+        await service.dispatchPrepared(
+          await service.reconcilePrepared(committed, 'sess-1', 'message.received', edited),
+        );
+
+        expect(queuedJob().payload.data).toMatchObject({ body: 'edited text' });
+        expect(queuedJob().baseHash).toBe(dataHash(held));
+      });
+
+      it('is left out for a committed row this commit did not open, which the reconcile leaves as it was', async () => {
+        outbox().updatePendingPayload = jest.fn().mockResolvedValue(true);
+        const service = await queueService();
+        const committed = await service.prepareDeliveries('sess-1', 'message.received', message);
+
+        await service.dispatchPrepared(
+          await service.reconcilePrepared(committed, 'sess-1', 'message.received', edited, []),
+        );
+
+        expect(outbox().updatePendingPayload).not.toHaveBeenCalled();
+        expect(queuedJob().baseHash).toBeUndefined();
+      });
     });
 
     it('still enqueues a reconciler replay when the queue is enabled', async () => {
@@ -2743,15 +3140,160 @@ describe('WebhookDeliveryService', () => {
       expect(calls[1][1].headers).not.toHaveProperty('X-OpenWA-Signature');
     });
 
-    it('counts a failed re-read as a failed attempt', async () => {
+    it('retries with the webhook row it read last when the re-read fails, spending no attempt on the read', async () => {
       const webhook = createMockWebhook({ retryCount: 2 });
       (repository.findOne as jest.Mock).mockResolvedValueOnce(webhook).mockRejectedValue(new Error('db down'));
-      mockFetch.mockRejectedValue(new Error('receiver down'));
+      mockFetch.mockRejectedValueOnce(new Error('receiver down')).mockResolvedValueOnce({ ok: true, status: 200 });
 
-      await expect(service.redeliver(webhook, 'sess-1', 'message.received', 'k', {})).resolves.toBe('failed');
+      await expect(service.redeliver(webhook, 'sess-1', 'message.received', 'k', {})).resolves.toBe('delivered');
 
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      expect(insertedFailures).toEqual([expect.objectContaining({ attempts: 2, lastError: 'db down' })]);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(insertedFailures).toEqual([]);
+    });
+
+    describe('a message whose outbox row changed while its delivery waited to retry', () => {
+      const message = { id: 'M-1', chatId: '628111@c.us', fromMe: false, type: 'text', body: 'first text' };
+      const rewritten = { ...message, body: 'edited text', edited: true };
+      const held = (): jest.Mock =>
+        (outboxService as unknown as { currentMessagePayload: jest.Mock }).currentMessagePayload;
+      const sentData = (): unknown[] =>
+        (mockFetch.mock.calls as Array<[string, SentInit]>).map(
+          ([, init]) => (JSON.parse(init.body) as { data: unknown }).data,
+        );
+
+      it('stops with nothing recorded once the message was taken back', async () => {
+        mockFetch.mockRejectedValue(new Error('receiver down'));
+        held().mockResolvedValue(null);
+
+        await expect(
+          service.redeliver(createMockWebhook({ retryCount: 3 }), 'sess-1', 'message.received', 'k', message),
+        ).resolves.toBe('cancelled');
+
+        expect(held()).toHaveBeenCalledWith('wh-uuid-1', 'k', 'message.received');
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(insertedFailures).toEqual([]);
+      });
+
+      it('rebuilds the next attempt from the data an edit or a delete through the API wrote', async () => {
+        mockFetch.mockRejectedValueOnce(new Error('receiver down')).mockResolvedValueOnce({ ok: true, status: 200 });
+        held().mockResolvedValue(rewritten);
+
+        await expect(
+          service.redeliver(createMockWebhook({ retryCount: 3 }), 'sess-1', 'message.received', 'k', message),
+        ).resolves.toBe('delivered');
+
+        expect(sentData()).toEqual([message, rewritten]);
+      });
+
+      it('goes on with the data it holds when the row cannot be read', async () => {
+        mockFetch.mockRejectedValueOnce(new Error('receiver down')).mockResolvedValueOnce({ ok: true, status: 200 });
+        held().mockRejectedValue(new Error('connection terminated'));
+
+        await service.redeliver(createMockWebhook({ retryCount: 3 }), 'sess-1', 'message.received', 'k', message);
+
+        expect(sentData()).toEqual([message, message]);
+      });
+
+      it('posts what it holds for a row its dispatch did not write, which tells nothing of a change', async () => {
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ retryCount: 3 })]);
+        mockFetch.mockRejectedValueOnce(new Error('receiver down')).mockResolvedValueOnce({ ok: true, status: 200 });
+        held().mockResolvedValue(rewritten);
+        const [item] = await service.prepareDeliveries('sess-1', 'message.received', message);
+
+        await service.dispatchPrepared([{ ...item, storedHash: null }]);
+
+        expect(sentData()).toEqual([message, message]);
+      });
+
+      describe('while a change of the message is kept on this node', () => {
+        const key = 'msg_sess-1_M-1_wh-uuid-1';
+        let holding: boolean;
+        let waits: number;
+        let realSleep: ((...args: unknown[]) => unknown) | undefined;
+        const postedWhileHeld: boolean[] = [];
+        beforeEach(() => {
+          holding = true;
+          waits = 0;
+          postedWhileHeld.length = 0;
+          outboxService.isMessageHeld.mockImplementation((k: string, webhookId: string) =>
+            Boolean(holding && k === key && webhookId === 'wh-uuid-1'),
+          );
+          mockFetch.mockImplementation(() => {
+            postedWhileHeld.push(holding);
+            return postedWhileHeld.length === 1
+              ? Promise.reject(new Error('receiver down'))
+              : Promise.resolve({ ok: true, status: 200 });
+          });
+          realSleep = (sleep as unknown as jest.Mock).getMockImplementation();
+          (sleep as unknown as jest.Mock).mockImplementation(() => {
+            // The kept change settles after the third wait.
+            if (++waits === 3) holding = false;
+            return Promise.resolve();
+          });
+        });
+        afterEach(() => (sleep as unknown as jest.Mock).mockImplementation(realSleep));
+        const retried = (): Promise<string> =>
+          service.redeliver(createMockWebhook({ retryCount: 2 }), 'sess-1', 'message.received', key, message);
+
+        it('waits, spending no attempt, when its row cannot be read', async () => {
+          held().mockRejectedValue(new Error('connection terminated'));
+
+          await expect(retried()).resolves.toBe('delivered');
+
+          expect(postedWhileHeld).toEqual([true, false]);
+          expect(sentData()).toEqual([message, message]);
+          expect(waits).toBe(3);
+        });
+
+        it('waits for it even when its row reads the copy from before the change, then sends what the row holds', async () => {
+          held().mockImplementation(() => Promise.resolve(holding ? undefined : rewritten));
+
+          await expect(retried()).resolves.toBe('delivered');
+
+          expect(postedWhileHeld).toEqual([true, false]);
+          expect(sentData()).toEqual([message, rewritten]);
+        });
+
+        it('stops without waiting once the row is closed', async () => {
+          held().mockResolvedValue(null);
+
+          await expect(retried()).resolves.toBe('cancelled');
+
+          expect(postedWhileHeld).toEqual([true]);
+          expect(waits).toBe(1);
+        });
+
+        it('keeps the copy the row holds on the terminal failure row', async () => {
+          (configService.get as jest.Mock).mockImplementation(<T>(k: string, def?: T) =>
+            k === 'webhook.failurePayloadRetentionHours' ? 24 : k === 'webhook.retryDelay' ? 100 : def,
+          );
+          mockFetch.mockRejectedValue(new Error('receiver down'));
+          held().mockResolvedValue(rewritten);
+
+          await service.redeliver(createMockWebhook({ retryCount: 1 }), 'sess-1', 'message.received', key, message);
+
+          expect(insertedFailures).toHaveLength(1);
+          expect(insertedFailures[0].payload).toEqual(rewritten);
+        });
+      });
+
+      it.each([
+        ['what the row holds', rewritten, rewritten],
+        ['none once the message was taken back', null, undefined],
+        ['its own copy when the row cannot be read', new Error('connection terminated'), message],
+      ])('keeps %s on the terminal failure row', async (_label, row, kept) => {
+        (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T) =>
+          key === 'webhook.failurePayloadRetentionHours' ? 24 : key === 'webhook.retryDelay' ? 100 : def,
+        );
+        mockFetch.mockRejectedValue(new Error('receiver down'));
+        if (row instanceof Error) held().mockRejectedValue(row);
+        else held().mockResolvedValue(row);
+
+        await service.redeliver(createMockWebhook({ retryCount: 1 }), 'sess-1', 'message.received', 'k', message);
+
+        expect(insertedFailures).toHaveLength(1);
+        expect(insertedFailures[0].payload).toEqual(kept);
+      });
     });
 
     it('backs off exponentially between attempts, as the queue does', async () => {
@@ -2907,6 +3449,86 @@ describe('WebhookDeliveryService', () => {
 
       expect(urlsCalled()).toEqual(['https://a.example/hook', 'https://b.example/hook', 'https://a.example/hook']);
       expect(internals().dispatchLimiter.activeCount).toBe(0);
+    });
+
+    describe('a message delivery that waited for a slot', () => {
+      const message = (id: string): Record<string, unknown> => ({
+        id,
+        chatId: '628111@c.us',
+        fromMe: false,
+        type: 'text',
+        body: 'first text',
+      });
+      const held = (): jest.Mock =>
+        (outboxService as unknown as { currentMessagePayload: jest.Mock }).currentMessagePayload;
+
+      it.each([
+        ['is not sent once its message was taken back', null, []],
+        ['is sent as the change left its row', { ...message('M-2'), body: 'edited text' }, ['edited text']],
+      ])('%s', async (_label, row, laterBodies) => {
+        internals().dispatchLimiter = new ConcurrencyLimiter(1, 1000);
+        hooksBySession['sess-a'] = [createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', retryCount: 1 })];
+        let release: () => void = () => undefined;
+        mockFetch
+          .mockImplementationOnce(() => new Promise(resolve => (release = () => resolve({ ok: true, status: 200 }))))
+          .mockResolvedValue({ ok: true, status: 200 });
+        held().mockImplementation((_webhookId: string, key: string) =>
+          Promise.resolve(key.includes('_M-2_') ? row : undefined),
+        );
+
+        const first = service.dispatch('sess-a', 'message.received', message('M-1'));
+        await settle(() => mockFetch.mock.calls.length > 0);
+        const second = service.dispatch('sess-a', 'message.received', message('M-2'));
+        await settle(() => internals().dispatchLimiter.queuedCount > 0);
+        release();
+        await Promise.all([first, second]);
+
+        const bodies = (mockFetch.mock.calls as Array<[string, { body: string }]>).map(
+          ([, init]) => (JSON.parse(init.body) as { data: { body: string } }).data.body,
+        );
+        expect(bodies).toEqual(['first text', ...laterBodies]);
+      });
+
+      it.each([
+        ['cannot be read', () => Promise.reject(new Error('connection terminated'))],
+        ['reads the copy from before the change', () => Promise.resolve(undefined)],
+      ])(
+        'waits without its slot while a change of its message is kept on this node and its row %s',
+        async (_label, read) => {
+          internals().dispatchLimiter = new ConcurrencyLimiter(1, 1000);
+          hooksBySession['sess-a'] = [createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', retryCount: 1 })];
+          let release: () => void = () => undefined;
+          let holding = true;
+          const postedWhileHeld: boolean[] = [];
+          mockFetch
+            .mockImplementationOnce(() => new Promise(resolve => (release = () => resolve({ ok: true, status: 200 }))))
+            .mockImplementation(() => (postedWhileHeld.push(holding), Promise.resolve({ ok: true, status: 200 })));
+          held().mockImplementation(read);
+          outboxService.isMessageHeld.mockImplementation((k: string) => holding && k.includes('_M-2_'));
+          const backoff = sleep as unknown as jest.Mock;
+          const realSleep = backoff.getMockImplementation();
+          const slotsInUse: number[] = [];
+          backoff.mockImplementation(() => {
+            slotsInUse.push(internals().dispatchLimiter.activeCount);
+            if (slotsInUse.length === 2) holding = false;
+            return Promise.resolve();
+          });
+
+          try {
+            const first = service.dispatch('sess-a', 'message.received', message('M-1'));
+            await settle(() => mockFetch.mock.calls.length > 0);
+            const second = service.dispatch('sess-a', 'message.received', message('M-2'));
+            await settle(() => internals().dispatchLimiter.queuedCount > 0);
+            release();
+            await Promise.all([first, second]);
+          } finally {
+            backoff.mockImplementation(realSleep);
+          }
+
+          expect(postedWhileHeld).toEqual([false]);
+          expect(slotsInUse).toEqual([0, 0]);
+        },
+      );
     });
 
     it('records a delivery woken from its backoff by shutdown as unsent and keeps its outbox row', async () => {

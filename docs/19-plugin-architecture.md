@@ -464,7 +464,26 @@ the operator's own history. For the same reason the gateway only keeps a returne
 events while it is still a message (an object with a string `id` and `chatId`): `data: null`, a
 primitive or `{}` is logged and skipped, and the chain carries on with the last message it held, so an
 earlier handler's rewrite (a redaction) still applies. `webhook:before` treats a result without a
-plain-object `payload` the same way.
+plain-object `payload` the same way. A returned message that leaves out `from`, `to`, `fromMe`,
+`timestamp`, `type`, `author`, `isGroup`, `kind`, `isLidSender` or `ephemeralDuration`, or returns it as
+`null` or in another type than the gateway reports it in (an object for `from`, a string for `fromMe`),
+keeps the gateway's value for it, so a redaction may return only `id`, `chatId` and the new `body`. When
+it names another `chatId` as well, the `isGroup` and `kind` it leaves out are those of that chat instead.
+A value of the right type stays as returned, an empty string, `false` and `0` included (the way to blank
+one of these fields), and content it leaves out, such as `media`, stays out. A handler that changes the
+message it was handed instead of returning one is held to the same rule, `id` and `chatId` included.
+Damaging that message (removing its `id`, say) does not bring back what an earlier handler removed: the
+gateway goes on with the message as the chain left it, never with the one that arrived.
+
+A message a handler filed under another `chatId`, `fromMe` or `author` keeps taking the changes made to it
+where it lives: a revoke, edit, reaction or receipt that names the chat, side and author the engine
+reported reaches its row, and one that names the chat the handler chose never does, so a handler cannot
+widen who may change a message. A delete or edit through the API is judged by the chat the engine reports
+it found the message in: to change a message filed under another contact's chat, name the chat the
+engine reported (the one `message:received` or `message:sent` was handed), since the engine looks the
+message up there. A row a handler moved before the gateway kept the engine's chat is judged by the chat
+it is filed under; a whatsapp-web.js one whose id and `from` or `to` name the engine's chat takes
+changes naming that chat too (see [14 - Migration Guide](./14-migration-guide.md#known-upgrade-hazards)).
 
 On a **pre-action** event it is a veto, because the action has not been taken yet: `false` on
 `message:sending` blocks the send (the caller gets a `400`), and on `webhook:before` it cancels that one
@@ -886,7 +905,7 @@ tier automatically. Key properties:
   logged at most once per event per minute and shows as the last hook error in plugin health.
 - A sandboxed **webhook** handler (`ctx.registerWebhook`) has a **5 s** inline budget (`INGRESS_DISPATCH_TIMEOUT_MS`, fixed, not a setting), which is the budget of every dispatch without the queue, replays included. Queued dispatch gets `SIMULATE_TYPING_MAX_MS` plus 5 s, capped at 25 s (10 s by default). The host
   cannot cancel a handler that overruns it: the delivery is retried while the first run still lands, so a handler must key
-  its side effects on `req.deliveryId` (with a hash of `req.rawBody` on a route that sets `dedupBodyMismatchAsNew`) and hand slow work to a background task (docs/25, section 25.7).
+  its side effects on `req.deliveryId` (with a hash of `req.rawBody` on a route that sets `dedupBodyMismatchAsNew`) and hand slow work to a background task (docs/25, section 25.7). A `ctx` call the handler is still awaiting when the budget runs out rejects with a thrown `Error`, though a send it started may still be delivered, and a call made after that is refused.
 - After a hook, webhook or search dispatch times out, the host pings the worker. A worker whose event
   loop is blocked (a synchronous loop) cannot answer within 5 s, so it is terminated and the plugin is
   set to `ERROR`, as on a crash; a slow async handler answers and is left running.

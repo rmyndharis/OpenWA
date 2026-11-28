@@ -463,6 +463,12 @@ PLUGIN_STATE_ROOT="$(openwa_resolve PLUGIN_STATE_DIR "$DATA_DIR" path)"
 PLUGIN_STATE_TARGET="$PLUGIN_STATE_ROOT/plugins"
 # The app reads the plaintext admin key from BOOTSTRAP_KEY_FILE when that is set.
 ADMIN_KEY_FILE="$(openwa_resolve BOOTSTRAP_KEY_FILE "$DATA_DIR/.api-key" path)"
+# What a stopped app kept to retry, against the data store it ran on: replayed into a restored one, it would send stale
+# changes and events. A restore that replaces the SQLite data store or stages a PostgreSQL dump moves it aside.
+RECOVERY_JOURNAL=""
+if [ -f "$STAGE/openwa.sqlite" ] || [ -f "$STAGE/database.sql" ]; then
+  RECOVERY_JOURNAL="$(openwa_resolve RECOVERY_JOURNAL_PATH "${DATA_DIR%/}/recovery-journal.jsonl" path)"
+fi
 
 # backup.sh archives state directories by content. An archive from before it followed symlinks
 # carries a link instead, which on this host may point at the very directory the restore empties
@@ -549,6 +555,9 @@ if [ -d "$STAGE/plugin-state" ]; then
 fi
 if [ -f "$STAGE/.api-key" ]; then
   archive_target BOOTSTRAP_KEY_FILE "$ADMIN_KEY_FILE" file "$DATA_DIR/.api-key"
+fi
+if [ -n "$RECOVERY_JOURNAL" ]; then
+  archive_target RECOVERY_JOURNAL_PATH "$RECOVERY_JOURNAL" file "${DATA_DIR%/}/recovery-journal.jsonl"
 fi
 # Written into the data dir after the trees, at fixed names, so no key moves them. A refilled tree can still
 # stand on one of them, and a copy onto a directory goes into it, through any link the archive put there.
@@ -669,6 +678,10 @@ fi
 # restore before the first database is written, instead of halfway through with a mixed install left
 # behind.
 restore_targets() {
+  # Before the data store it was kept against is replaced.
+  if [ -n "$RECOVERY_JOURNAL" ]; then
+    set_journal_aside
+  fi
   if [ -f "$STAGE/main.sqlite" ]; then
     restore_db "$STAGE/main.sqlite" "$MAIN_DB" "auth/audit DB"
   fi
@@ -697,6 +710,29 @@ restore_targets() {
   if [ -f "$STAGE/.api-key" ]; then
     restore_admin_key
   fi
+}
+
+# The recovery journal is moved aside, beside where it was, for the operator to read or delete: the restored app starts
+# without it. An empty one holds nothing to replay and stays.
+set_journal_aside() {
+  local aside n
+  [ -f "$RECOVERY_JOURNAL" ] && [ -s "$RECOVERY_JOURNAL" ] || return 0
+  if [ "$PHASE" = check ]; then
+    openwa_writable "$(dirname "$RECOVERY_JOURNAL")" ||
+      refuse_unwritable "$RECOVERY_JOURNAL" "recovery journal (RECOVERY_JOURNAL_PATH)"
+    return
+  fi
+  [ "$PHASE" = apply ] || return 0
+  aside="$RECOVERY_JOURNAL.pre-restore-$RESTORE_TIMESTAMP"
+  n=1
+  while [ -e "$aside" ] || [ -L "$aside" ]; do
+    n=$((n + 1))
+    aside="$RECOVERY_JOURNAL.pre-restore-$RESTORE_TIMESTAMP-$n"
+  done
+  mv "$RECOVERY_JOURNAL" "$aside"
+  log "Moved the recovery journal aside -> $aside"
+  log "  what the app kept to retry against the replaced data store is not replayed into the restored one;"
+  log "  keep the file to read what it held, or delete it"
 }
 
 # The plaintext admin key goes where the app reads it. Checked and, outside the data dir, snapshotted

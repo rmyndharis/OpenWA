@@ -3,6 +3,7 @@ import { Session, SessionStatus } from './entities/session.entity';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { type createLogger } from '../../common/services/logger.service';
+import type { SessionRows } from './session-row-park';
 
 export interface UpdateStatusOptions {
   /** Checked after the write settles; returning false suppresses WS/webhook announcement. */
@@ -38,17 +39,21 @@ export class SessionStatusBroadcaster {
   private readonly eventsGateway: EventsGateway;
   private readonly webhookService: WebhookService;
   private readonly logger: ReturnType<typeof createLogger>;
+  private readonly rows?: SessionRows;
 
   constructor(deps: {
     sessionRepository: Repository<Session>;
     eventsGateway: EventsGateway;
     webhookService: WebhookService;
     logger: ReturnType<typeof createLogger>;
+    /** Where a status write the database refused is kept until it answers. */
+    rows?: SessionRows;
   }) {
     this.sessionRepository = deps.sessionRepository;
     this.eventsGateway = deps.eventsGateway;
     this.webhookService = deps.webhookService;
     this.logger = deps.logger;
+    this.rows = deps.rows;
   }
 
   /**
@@ -56,7 +61,8 @@ export class SessionStatusBroadcaster {
    *
    * Accepts either a bare `canAnnounce` callback or an `UpdateStatusOptions` object carrying an
    * optional `ownerNodeId` SQL fence. Returns `true` when the UPDATE matched (`affected !== 0`),
-   * and `false` (skipping announcement) when `affected === 0`.
+   * and `false` (skipping announcement) when `affected === 0`. A write the database refused still
+   * rejects, and is kept to be written once it answers (see SessionRows).
    */
   async updateStatus(
     id: string,
@@ -73,7 +79,20 @@ export class SessionStatusBroadcaster {
             ]
           : { id, nodeId: resolved.ownerNodeId }
         : id;
-    const result = await this.sessionRepository.update(where, { status });
+    const live = this.rows?.begin(id, 'status');
+    if (live?.wait) await live.wait;
+    const superseded = this.rows?.kept(id, 'status');
+    let result: unknown;
+    try {
+      result = await this.sessionRepository.update(where, { status });
+    } catch (error) {
+      const owner = resolved.ownerNodeId;
+      const owners = owner === undefined ? undefined : resolved.allowUnowned ? [owner, null] : [owner];
+      this.rows?.keepSet(id, 'status', status, error, { owners });
+      throw error;
+    } finally {
+      live?.end();
+    }
     const updated = (result as { affected?: number } | undefined)?.affected !== 0;
     if (!updated) {
       this.logger.debug(`Skipped status announcement for ${status} (0 rows updated)`, {
@@ -83,6 +102,7 @@ export class SessionStatusBroadcaster {
       });
       return false;
     }
+    this.rows?.landed(id, 'status', status, superseded);
     this.logger.debug(`Session status updated to ${status}`, {
       sessionId: id,
       status,

@@ -55,3 +55,23 @@ describe('docs/09 §9.5 matches the enforced coverage floors', () => {
     }
   });
 });
+
+describe('docs/09 states the dashboard coverage floors that its test:cov enforces', () => {
+  it('names the lines, branches and functions floors of dashboard/package.json', () => {
+    const pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', 'dashboard', 'package.json'), 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    const floor = (metric: string): string => {
+      const match = new RegExp(`--test-coverage-${metric}=(\\d+)`).exec(pkg.scripts['test:cov']);
+      if (!match) throw new Error(`dashboard test:cov sets no --test-coverage-${metric}`);
+      return match[1];
+    };
+    const [lines, branches, functions] = [floor('lines'), floor('branches'), floor('functions')];
+    const doc = readFileSync(join(__dirname, '..', '..', 'docs', '09-testing-strategy.md'), 'utf8');
+
+    expect(doc).toContain(`(${lines}% lines, ${branches}% branches, ${functions}% functions)`);
+    expect(doc.slice(doc.indexOf('## 9.5'), doc.indexOf('## 9.6'))).toContain(
+      `fails below ${lines}% lines, ${branches}% branches and ${functions}% functions`,
+    );
+  });
+});

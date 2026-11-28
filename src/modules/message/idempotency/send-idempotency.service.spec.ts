@@ -114,9 +114,10 @@ describe('SendIdempotencyService (sqlite)', () => {
     expect(await service.claim(input)).toEqual({ kind: 'outcome_unknown' });
   });
 
-  it('reports a pending claim past the stale window as outcome unknown, not in progress', async () => {
+  it('reports a claim handed to the engine past the stale window as outcome unknown, not in progress', async () => {
     const claim = await service.claim(input);
     if (claim.kind !== 'claimed') throw new Error('expected a claim');
+    await service.handOver(claim.id);
     const claimedLongAgo = Date.now() - SEND_IDEMPOTENCY_STALE_PENDING_MS - 1000;
     await repo.update({ id: claim.id }, { expiresAt: new Date(claimedLongAgo + SEND_IDEMPOTENCY_TTL_MS) });
 
@@ -231,6 +232,236 @@ describe('SendIdempotencyService (sqlite)', () => {
     findSpy.mockClear();
     expect(await service.pruneExpired()).toBe(0);
     expect(findSpy).not.toHaveBeenCalled();
+  });
+
+  describe('hand-over to the engine', () => {
+    const backdate = (id: string) =>
+      repo.update(
+        { id },
+        { expiresAt: new Date(Date.now() - SEND_IDEMPOTENCY_STALE_PENDING_MS - 1000 + SEND_IDEMPOTENCY_TTL_MS) },
+      );
+
+    it('holds a fresh claim as not handed over, and records the hand-over', async () => {
+      const claim = await service.claim(input);
+      if (claim.kind !== 'claimed') throw new Error('expected a claim');
+      expect((await repo.findOneByOrFail({ id: claim.id })).state).toBe('claimed');
+
+      await service.handOver(claim.id);
+
+      expect((await repo.findOneByOrFail({ id: claim.id })).state).toBe('pending');
+    });
+
+    it('lets the next request take over a claim that never reached the engine once it is stale', async () => {
+      const claim = await service.claim(input);
+      if (claim.kind !== 'claimed') throw new Error('expected a claim');
+      await backdate(claim.id);
+
+      const takeover = await service.claim(input);
+
+      expect(takeover.kind).toBe('claimed');
+      expect(takeover).not.toEqual(claim);
+      expect(await repo.count()).toBe(1);
+    });
+
+    it('keeps a stale claim that never reached the engine bound to its own body', async () => {
+      const claim = await service.claim(input);
+      if (claim.kind !== 'claimed') throw new Error('expected a claim');
+      await backdate(claim.id);
+
+      expect(await service.claim({ ...input, requestHash: 'h2' })).toEqual({ kind: 'mismatch' });
+    });
+
+    // A send that pacing held past the stale window must not go out beside the request that took its key over.
+    it('refuses the hand-over of a claim another request took over', async () => {
+      const claim = await service.claim(input);
+      if (claim.kind !== 'claimed') throw new Error('expected a claim');
+      await backdate(claim.id);
+      expect((await service.claim(input)).kind).toBe('claimed');
+
+      await expect(service.handOver(claim.id)).rejects.toMatchObject({
+        response: { statusCode: 409, code: 'IDEMPOTENCY_KEY_IN_PROGRESS' },
+      });
+    });
+
+    it('refuses a second hand-over of the same claim, which stays handed over', async () => {
+      const claim = await service.claim(input);
+      if (claim.kind !== 'claimed') throw new Error('expected a claim');
+      await service.handOver(claim.id);
+
+      await expect(service.handOver(claim.id)).rejects.toMatchObject({ response: { statusCode: 409 } });
+      expect((await repo.findOneByOrFail({ id: claim.id })).state).toBe('pending');
+    });
+
+    it('leaves a completed claim and its stored answer as they are when a late hand-over arrives', async () => {
+      const claim = await service.claim(input);
+      if (claim.kind !== 'claimed') throw new Error('expected a claim');
+      await service.handOver(claim.id);
+      await service.complete(claim.id, { messageId: 'm1' });
+
+      await expect(service.handOver(claim.id)).rejects.toMatchObject({ response: { statusCode: 409 } });
+      expect(await service.claim(input)).toEqual({ kind: 'replay', body: { messageId: 'm1' } });
+    });
+
+    // The holder reaches the engine between the retaker's read of its stale claim and the retaker's delete.
+    it('leaves a stale claim to a holder that hands over before the takeover deletes it', async () => {
+      const claim = await service.claim(input);
+      if (claim.kind !== 'claimed') throw new Error('expected a claim');
+      await backdate(claim.id);
+      const remove = repo.delete.bind(repo);
+      jest.spyOn(repo, 'delete').mockImplementationOnce(async criteria => {
+        await service.handOver(claim.id);
+        return remove(criteria);
+      });
+
+      expect(await service.claim(input)).toEqual({ kind: 'outcome_unknown' });
+      expect(await repo.findOneByOrFail({ id: claim.id })).toMatchObject({ state: 'pending' });
+      expect(await repo.count()).toBe(1);
+    });
+
+    it('frees a claim handed to the engine when the engine proves nothing was sent', async () => {
+      const claim = await service.claim(input);
+      if (claim.kind !== 'claimed') throw new Error('expected a claim');
+      await service.handOver(claim.id);
+      await service.release(claim.id);
+
+      expect((await service.claim(input)).kind).toBe('claimed');
+    });
+  });
+
+  describe('a release the database refused', () => {
+    afterEach(() => jest.useRealTimers());
+
+    it('is tried again, later each time, until it lands', async () => {
+      const claim = await service.claim(input);
+      if (claim.kind !== 'claimed') throw new Error('expected a claim');
+      jest.useFakeTimers();
+      const remove = repo.delete.bind(repo);
+      const refused = new Error('Connection terminated unexpectedly');
+      const del = jest
+        .spyOn(repo, 'delete')
+        .mockRejectedValueOnce(refused)
+        .mockRejectedValueOnce(refused)
+        .mockImplementation(criteria => remove(criteria));
+
+      await expect(service.release(claim.id)).rejects.toBe(refused);
+      await jest.advanceTimersByTimeAsync(999);
+      expect(del).toHaveBeenCalledTimes(1);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(del).toHaveBeenCalledTimes(2);
+      // Refused again: the next try comes after twice the wait.
+      await jest.advanceTimersByTimeAsync(1999);
+      expect(del).toHaveBeenCalledTimes(2);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(del).toHaveBeenCalledTimes(3);
+
+      jest.useRealTimers();
+      expect((await service.claim(input)).kind).toBe('claimed');
+    });
+
+    // Refused every time: the passes come 1, 3, 7, 15, 31, 61 and 91 seconds after the first refusal.
+    it('waits twice as long after each refusal, up to thirty seconds, and stays there', async () => {
+      jest.useFakeTimers();
+      const del = jest.spyOn(repo, 'delete').mockRejectedValue(new Error('Connection terminated unexpectedly'));
+      await expect(service.release('claim-1')).rejects.toThrow();
+      let now = 0;
+      const passesBy = async (ms: number): Promise<number> => {
+        await jest.advanceTimersByTimeAsync(ms - now);
+        now = ms;
+        return del.mock.calls.length - 1;
+      };
+
+      expect(await passesBy(30_999)).toBe(4);
+      expect(await passesBy(31_000)).toBe(5);
+      expect(await passesBy(60_999)).toBe(5);
+      expect(await passesBy(61_000)).toBe(6);
+      expect(await passesBy(90_999)).toBe(6);
+      expect(await passesBy(91_000)).toBe(7);
+    });
+
+    it('starts again from one second once every owed release has landed', async () => {
+      jest.useFakeTimers();
+      const remove = repo.delete.bind(repo);
+      const refused = new Error('Connection terminated unexpectedly');
+      const del = jest
+        .spyOn(repo, 'delete')
+        .mockRejectedValueOnce(refused)
+        // The pass at one second is refused too, so the next one waits two.
+        .mockRejectedValueOnce(refused)
+        .mockImplementationOnce(criteria => remove(criteria))
+        .mockRejectedValueOnce(refused)
+        .mockImplementation(criteria => remove(criteria));
+      await expect(service.release('claim-a')).rejects.toBe(refused);
+      await jest.advanceTimersByTimeAsync(3000);
+      expect(del).toHaveBeenCalledTimes(3);
+
+      await jest.advanceTimersByTimeAsync(7000);
+      await expect(service.release('claim-b')).rejects.toBe(refused);
+      await jest.advanceTimersByTimeAsync(999);
+      expect(del).toHaveBeenCalledTimes(4);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(del).toHaveBeenCalledTimes(5);
+    });
+
+    it('ends a pass at its first refusal, so the wait doubles once a pass however many releases are owed', async () => {
+      jest.useFakeTimers();
+      const del = jest.spyOn(repo, 'delete').mockRejectedValue(new Error('Connection terminated unexpectedly'));
+      for (const id of ['claim-a', 'claim-b', 'claim-c']) await expect(service.release(id)).rejects.toThrow();
+
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(del).toHaveBeenCalledTimes(4);
+      await jest.advanceTimersByTimeAsync(1999);
+      expect(del).toHaveBeenCalledTimes(4);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(del).toHaveBeenCalledTimes(5);
+    });
+
+    it('keeps one pass scheduled for two refusals, and drops it at shutdown', async () => {
+      jest.useFakeTimers();
+      const del = jest.spyOn(repo, 'delete').mockRejectedValue(new Error('Connection terminated unexpectedly'));
+      await expect(service.release('claim-a')).rejects.toThrow();
+      await expect(service.release('claim-b')).rejects.toThrow();
+
+      await jest.advanceTimersByTimeAsync(1000);
+      // One pass, ended by its first refusal.
+      expect(del).toHaveBeenCalledTimes(3);
+      await service.onModuleDestroy();
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(del).toHaveBeenCalledTimes(3);
+    });
+
+    it('schedules no further pass when the one running at shutdown is refused', async () => {
+      jest.useFakeTimers();
+      const refused = new Error('Connection terminated unexpectedly');
+      let refuseRunning!: (error: Error) => void;
+      const del = jest
+        .spyOn(repo, 'delete')
+        .mockRejectedValueOnce(refused)
+        .mockImplementationOnce(() => new Promise<never>((_resolve, reject) => (refuseRunning = reject)));
+      await expect(service.release('claim-a')).rejects.toBe(refused);
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(del).toHaveBeenCalledTimes(2);
+
+      await service.onModuleDestroy();
+      refuseRunning(refused);
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(del).toHaveBeenCalledTimes(2);
+    });
+
+    it('is not tried again once the module stopped', async () => {
+      const claim = await service.claim(input);
+      if (claim.kind !== 'claimed') throw new Error('expected a claim');
+      jest.useFakeTimers();
+      const del = jest.spyOn(repo, 'delete').mockRejectedValue(new Error('Connection terminated unexpectedly'));
+
+      await expect(service.release(claim.id)).rejects.toThrow();
+      await service.onModuleDestroy();
+      await jest.advanceTimersByTimeAsync(60_000);
+
+      expect(del).toHaveBeenCalledTimes(1);
+      await expect(service.release(claim.id)).rejects.toThrow();
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(del).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('rethrows a storage error that is not a duplicate key', async () => {

@@ -4,10 +4,11 @@ import 'reflect-metadata';
 import { randomBytes, randomUUID } from 'crypto';
 import { DataSource } from 'typeorm';
 import { InfraDataController } from './infra-data.controller';
-import { InfraDataService } from './infra-data.service';
+import { InfraDataService, type InfraExportDataResult } from './infra-data.service';
+import { readExport } from '../../../test/helpers/read-export';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
-import { Message } from '../message/entities/message.entity';
+import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
 import { Template } from '../template/entities/template.entity';
 import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
@@ -119,7 +120,7 @@ describePostgres('InfraDataController.importData (postgres)', () => {
         }),
       );
     }
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     const onlyKept = {
       tables: {
         ...dump.tables,
@@ -140,7 +141,7 @@ describePostgres('InfraDataController.importData (postgres)', () => {
       { lid: '111', phone: '628111', sessionId: null, isReported: true },
       { lid: '222', phone: '628222', sessionId: null, isReported: false },
     ]);
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     await expect(controller.importData(dump as never)).resolves.toMatchObject({ imported: true, warnings: [] });
     expect(await mappings.findOneBy({ lid: '111' })).toMatchObject({ isReported: true });
     expect(await mappings.findOneBy({ lid: '222' })).toMatchObject({ isReported: false });
@@ -154,7 +155,7 @@ describePostgres('InfraDataController.importData (postgres)', () => {
   it('restores the deletion mark of a chat state', async () => {
     const states = ds.getRepository(ChatState);
     await states.insert([{ sessionId: 's1', chatId: '628111@s.whatsapp.net', deletedAt: 1790000000000 }]);
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     await expect(controller.importData(dump as never)).resolves.toMatchObject({ imported: true, warnings: [] });
     expect(await states.findOneBy({ chatId: '628111@s.whatsapp.net' })).toMatchObject({ deletedAt: 1790000000000 });
   });
@@ -164,7 +165,7 @@ describePostgres('InfraDataController.importData (postgres)', () => {
   // messages stands in for a table that has grown large: with the pool's timeout lowered below it, the
   // import only completes when it lifts the timeout for its own transaction.
   it('completes a restore whose clears outlast the runtime statement timeout', async () => {
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     const strict = await new DataSource({
       type: 'postgres',
       host: process.env.DATABASE_HOST || 'localhost',
@@ -218,7 +219,7 @@ describePostgres('InfraDataController.importData (postgres)', () => {
           config: {},
         }),
       );
-      const dump = await controller.exportData();
+      const dump = await controller.exportData().then(readExport);
       const withoutRemoved = {
         tables: {
           ...dump.tables,
@@ -308,4 +309,76 @@ describePostgres('InfraDataController.importData (postgres)', () => {
     },
     30_000,
   );
+
+  it('exports tables larger than one read through cursors, as they were when the export started', async () => {
+    const sessions = ds.getRepository(Session);
+    const sessionId = randomUUID();
+    await sessions.save(
+      sessions.create({
+        id: sessionId,
+        name: `session-${sessionId.slice(0, 8)}`,
+        status: SessionStatus.DISCONNECTED,
+        phone: null,
+        pushName: null,
+        config: {},
+        proxyUrl: null,
+        proxyType: null,
+        connectedAt: null,
+        lastActiveAt: null,
+      }),
+    );
+    const messages = ds.getRepository(Message);
+    const ids = Array.from({ length: 1300 }, () => randomUUID());
+    for (let from = 0; from < ids.length; from += 500) {
+      await messages.insert(
+        ids.slice(from, from + 500).map((id, i) =>
+          messages.create({
+            id,
+            sessionId,
+            waMessageId: `WA-${id}`,
+            chatId: 'c1@s.whatsapp.net',
+            from: 'a@s.whatsapp.net',
+            to: 'b@s.whatsapp.net',
+            body: 'x'.repeat(200),
+            type: 'text',
+            direction: MessageDirection.INCOMING,
+            timestamp: 1_700_000_000 + from + i,
+            // Every other row carries a payload, which the budget below drops.
+            metadata: ((from + i) % 2 ? { media: { mimetype: 'image/jpeg', data: 'QUJD' } } : null) as never,
+            status: MessageStatus.DELIVERED,
+          }),
+        ) as never[],
+      );
+    }
+    const mappings = ds.getRepository(LidMapping);
+    const lids = Array.from({ length: 1300 }, (_, i) => `${sessionId.slice(0, 8)}${i}`);
+    for (let from = 0; from < lids.length; from += 500) {
+      await mappings.insert(lids.slice(from, from + 500).map(lid => mappings.create({ lid, phone: null, sessionId })));
+    }
+    const cfg = { get: (key: string, def?: unknown) => (key === 'dataDatabase.type' ? 'postgres' : def) };
+    const previous = process.env.EXPORT_INLINE_MEDIA_BUDGET_BYTES;
+    process.env.EXPORT_INLINE_MEDIA_BUDGET_BYTES = '0';
+    let document: string;
+    try {
+      const pieces = new InfraDataService(cfg as never, ds).exportData();
+      const first = await pieces.next();
+      // Committed while the snapshot is held and most of the table is still unread.
+      await messages.delete({ sessionId });
+      document = String(first.value);
+      for await (const piece of pieces) document += piece;
+    } finally {
+      if (previous === undefined) delete process.env.EXPORT_INLINE_MEDIA_BUDGET_BYTES;
+      else process.env.EXPORT_INLINE_MEDIA_BUDGET_BYTES = previous;
+    }
+
+    const dump = JSON.parse(document) as InfraExportDataResult;
+    const exported = dump.tables.messages.filter(row => row.sessionId === sessionId);
+    expect(exported.map(row => row.id)).toEqual(ids);
+    expect(
+      exported.filter(row => typeof row.metadata === 'string' && row.metadata.includes('"omitted":true')),
+    ).toHaveLength(650);
+    expect(dump.tables.lidMappings.filter(row => row.sessionId === sessionId).map(row => row.lid)).toEqual(lids);
+    expect(dump.counts.messages).toBe(dump.tables.messages.length);
+    expect(await messages.count({ where: { sessionId } })).toBe(0);
+  });
 });

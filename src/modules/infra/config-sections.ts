@@ -63,14 +63,23 @@ function isStrictlyInside(baseDir: string, candidate: string): boolean {
  * raw `..` segments (including `..`-over-symlink escapes), `./data` itself, absolute escapes, and
  * symlink escapes before any directory probe or write. Returns the trimmed path so persisted and
  * probed values never diverge on leading/trailing whitespace.
+ *
+ * The path already in effect (`current`) is exempt and returns undefined, so the caller keeps it as it is: the page
+ * sends both paths back with every save, and one set before this rule (the `./uploads` v0.2.0 to v0.7.3 wrote) would
+ * otherwise refuse every save on the page. Only an exact match after trimming counts, never another spelling of it.
  */
-function assertContainedDataSubpath(fieldLabel: string, submitted: string): string {
+function assertContainedDataSubpath(
+  fieldLabel: string,
+  submitted: string,
+  current: string | undefined,
+): string | undefined {
   if (hasPathControlChar(submitted)) {
     throw new BadRequestException(
       `Invalid configuration value for ${fieldLabel}: control characters and line breaks are not allowed`,
     );
   }
   const trimmed = submitted.trim();
+  if (trimmed === current?.trim()) return undefined;
   if (trimmed.split(/[\\/]+/).includes('..')) {
     throw new BadRequestException(
       `Refusing to save ${fieldLabel} '${submitted}': parent traversal ('..') segments are not allowed`,
@@ -377,8 +386,12 @@ export function applyStorageSection(
     // there is no bundled MinIO backing a local storage path.
     updates.MINIO_BUILTIN = 'false';
     if (storage.localPath !== undefined) {
-      const localPath = assertContainedDataSubpath('storage.localPath', storage.localPath || './data/media');
-      updates.STORAGE_LOCAL_PATH = localPath;
+      const localPath = assertContainedDataSubpath(
+        'storage.localPath',
+        storage.localPath || './data/media',
+        nextBootValue('STORAGE_LOCAL_PATH', existing),
+      );
+      if (localPath !== undefined) updates.STORAGE_LOCAL_PATH = localPath;
     }
     // Switching to local: drop stale S3 keys.
     for (const k of [
@@ -477,8 +490,9 @@ export function applyEngineSection(
     const sessionDataPath = assertContainedDataSubpath(
       'engine.sessionDataPath',
       engine.sessionDataPath || './data/sessions',
+      nextBootValue('SESSION_DATA_PATH', existing),
     );
-    updates.SESSION_DATA_PATH = sessionDataPath;
+    if (sessionDataPath !== undefined) updates.SESSION_DATA_PATH = sessionDataPath;
   }
   if (engine.browserArgs !== undefined) {
     if (engine.browserArgs) {

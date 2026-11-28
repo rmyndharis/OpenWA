@@ -23,6 +23,9 @@ import {
   redactSsrfError,
 } from '../../common/security/ssrf-guard';
 import { PreparedWebhookDelivery, WebhookDeliveryService, WebhookPayload } from './webhook-delivery.service';
+import type { MessageCopyChange, MessageCopyPredicate, MessageHold } from './webhook-outbox.service';
+import type { MessageEngineRef } from '../message/entities/message.entity';
+import type { RecoveryQueue } from '../../common/utils/recovery-queue';
 
 // Delivery-engine types (payload and queue job shapes) live on WebhookDeliveryService; re-exported
 // here so existing importers (the queue processor) keep a single stable path.
@@ -420,8 +423,13 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
    * WebhookDeliveryService. Not async on purpose: a frame suspended on the engine would keep the
    * unshed event alive until every delivery settles.
    */
-  dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
-    return this.delivery.dispatch(sessionId, event, data);
+  dispatch(
+    sessionId: string,
+    event: string,
+    data: Record<string, unknown>,
+    options?: { engineRef?: MessageEngineRef | null },
+  ): Promise<void> {
+    return this.delivery.dispatch(sessionId, event, data, options);
   }
 
   /** Pre-transaction read-only phase: resolve matching webhooks and build outbox rows. */
@@ -429,7 +437,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     sessionId: string,
     event: string,
     data: Record<string, unknown>,
-    options?: { throwOnLookupError?: boolean },
+    options?: { throwOnLookupError?: boolean; engineRef?: MessageEngineRef | null },
   ): Promise<PreparedWebhookDelivery[]> {
     return this.delivery.prepareDeliveries(sessionId, event, data, null, options);
   }
@@ -449,8 +457,10 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     event: string,
     finalData: Record<string, unknown>,
     owned?: readonly PreparedWebhookDelivery[],
+    openNew?: boolean,
+    engineRef?: MessageEngineRef | null,
   ): Promise<PreparedWebhookDelivery[]> {
-    return this.delivery.reconcilePrepared(committed, sessionId, event, finalData, owned);
+    return this.delivery.reconcilePrepared(committed, sessionId, event, finalData, owned, openNew, engineRef);
   }
 
   /** Post-commit async dispatch phase: run webhook:before hooks and deliver/enqueue prepared rows. */
@@ -463,21 +473,56 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     return this.delivery.cancelPrepared(prepared);
   }
 
-  /** Close any still-pending message outbox rows when an engine revoke arrives. */
+  /** Close any still-open message outbox rows and drop kept failure copies when an engine revoke arrives. */
   closePendingDeliveriesForMessage(
     sessionId: string,
     waMessageId: string,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     return this.delivery.closePendingForMessage(sessionId, waMessageId, shouldApply);
   }
 
-  /** Redact payloads on any still-pending message outbox rows when a REST delete clears a message. */
+  /** Redact the open outbox rows and kept failure copies of a message a REST delete clears. */
   redactPendingDeliveriesForMessage(
     sessionId: string,
     waMessageId: string,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     return this.delivery.redactPendingForMessage(sessionId, waMessageId, shouldApply);
+  }
+
+  /** Apply a change of a message to every copy its deliveries hold; throws when the database fails. */
+  changeMessageCopies(
+    sessionId: string,
+    waMessageId: string,
+    change: MessageCopyChange,
+    shouldApply?: MessageCopyPredicate,
+  ): Promise<void> {
+    return this.delivery.changeMessageCopies(sessionId, waMessageId, change, shouldApply);
+  }
+
+  /** The queue of what the database refused, which the message projector shares (see the delivery). */
+  recoveryQueue(): RecoveryQueue {
+    return this.delivery.recoveryQueue();
+  }
+
+  /** Whether this node still owns a session, for the kept state events of one it no longer does. */
+  setSessionOwnership(owns: (sessionId: string) => boolean): void {
+    this.delivery.setSessionOwnership(owns);
+  }
+
+  /** A change of the message is kept on this node until the database answers, or no longer is (see the delivery). */
+  holdMessage(sessionId: string, waMessageId: string, held: MessageHold | false): void {
+    this.delivery.holdMessage(sessionId, waMessageId, held);
+  }
+
+  /** Write an edit of a stored message into its open outbox rows and kept failure copies. */
+  rewritePendingDeliveriesForMessage(
+    sessionId: string,
+    waMessageId: string,
+    body: string,
+    shouldApply?: MessageCopyPredicate,
+  ): Promise<void> {
+    return this.delivery.rewritePendingForMessage(sessionId, waMessageId, body, shouldApply);
   }
 }

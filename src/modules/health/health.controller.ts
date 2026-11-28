@@ -25,6 +25,7 @@ import { SlidingWindowLimiter } from '../events/ws-rate-limit';
 import { limiterKeyForIp, resolveClientIp } from '../../common/utils/ip';
 import { presentedApiKey } from '../../common/security/bearer-token';
 import { createLogger } from '../../common/services/logger.service';
+import { selectOne } from '../../common/utils/shared-connection';
 
 interface DependencyStatus {
   status: 'up' | 'down';
@@ -218,7 +219,7 @@ export class HealthController {
 
   private async probeDatabase(dataSource: DataSource): Promise<'up' | 'down'> {
     try {
-      await this.withTimeout(dataSource.query('SELECT 1'), READINESS_PROBE_TIMEOUT_MS);
+      await this.withTimeout(selectOne(dataSource), READINESS_PROBE_TIMEOUT_MS);
       return 'up';
     } catch {
       return 'down';

@@ -1,4 +1,6 @@
 import { queryLidPhone } from './baileys-identity-query';
+import { isDatabaseUnavailable } from '../../common/utils/recovery-queue';
+import type { StoredChange } from './baileys-events';
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type {
   AnyMessageContent,
@@ -51,7 +53,7 @@ import {
   markOutcomeUnknown,
   provesNothingSent,
 } from '../../common/errors/engine-not-sent.error';
-import { parseWaId, userPart } from '../identity/wa-id';
+import { isIndividualWid, parseWaId, userPart } from '../identity/wa-id';
 import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, guardLookup, withQueryDeadline } from './baileys-query-deadline';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { describeAudio, describeVideo } from './baileys-audio-probe';
@@ -92,6 +94,8 @@ export interface BaileysMessagingHost {
   getStoredMessage(messageId: string): Promise<WAMessage | null> | undefined;
   /** Rewrite a stored message in place (see BaileysMessageStore.update); undefined without a store. */
   updateStoredMessage(messageId: string, change: (stored: WAMessage) => WAMessage | null): Promise<void> | undefined;
+  /** Keep a change of a stored copy the store refused, to apply once it answers (see BaileysEventsHost). */
+  keepStoredChange?(messageId: string, changeId: string, change: StoredChange): void;
   /** Whether this message was deleted for everyone, even where the stored copy does not show it yet. */
   wasDeletedForEveryone(messageId: string): boolean;
   /** Record a delete for everyone this session just made (see wasDeletedForEveryone). */
@@ -396,6 +400,12 @@ export function uploadBeforeRelay(sock: WASocket): WAMediaUploadFunction {
 const NUMBER_ID_CACHE_MAX_ENTRIES = 5000;
 /** Positive TTL for cached onWhatsApp recipient resolutions used on outbound sends. */
 const NUMBER_ID_CACHE_TTL_MS = 15 * 60_000;
+/** Max phone/LID pairs a session remembers having asked WhatsApp about; past it the one asked about longest ago goes. */
+const LID_CONFIRMATION_MAX_ENTRIES = 5000;
+/** Max confirmations waiting their turn behind the one whose query is out. */
+const LID_CONFIRMATION_MAX_QUEUED = 1000;
+/** How long a pair is not asked about again after a send asked, whatever the answer was. */
+const LID_CONFIRMATION_TTL_MS = 15 * 60_000;
 
 function isInvalidRecipientSendError(error: unknown): boolean {
   if (error instanceof RecipientUnreachableError) return true;
@@ -406,6 +416,17 @@ function isInvalidRecipientSendError(error: unknown): boolean {
   return status === 400 || status === 404;
 }
 
+/**
+ * What send() reports when the number check answered another number than the one addressed: that number as a
+ * neutral phone id, and the jid the message went to (its LID when one is known).
+ */
+interface RenamedRecipient {
+  phone?: string;
+  jid?: string;
+  /** The jid the message went to, whatever the number check answered: a phone or a LID. */
+  to?: string;
+}
+
 export class BaileysMessaging {
   // Positive-only LRU + TTL cache of canonical phone digits -> neutral JID for outbound sends.
   private readonly numberIdCache = new Map<string, { numberId: string; storedAt: number }>();
@@ -413,17 +434,27 @@ export class BaileysMessaging {
   private readonly numberIdInFlight = new Map<string, Promise<string | null>>();
   // Generation fence bumped on clearNumberIdCache() so stale in-flight lookups cannot repopulate.
   private numberIdCacheGeneration = 0;
+  // Phone/LID pairs a send asked WhatsApp to confirm, keyed `<lid>:<phone>`, each with its last ask, oldest ask first.
+  private readonly lidConfirmations = new Map<string, { at: number }>();
+  // One confirmation query at a time, so a run of sends to cold contacts cannot fire a burst of them.
+  private readonly lidConfirmationGate = new ConcurrencyLimiter(1, LID_CONFIRMATION_MAX_QUEUED);
+  // Until when no pair is asked about: WhatsApp rate-limited a confirmation query.
+  private lidConfirmationPausedUntil = 0;
 
   constructor(
     private readonly host: BaileysMessagingHost,
     private readonly queryBudgetMs: number = BAILEYS_QUERY_BUDGET_MS,
   ) {}
 
-  /** Drop cached send-path recipient number-id resolutions and fence any in-flight lookups. */
+  /**
+   * Drop cached send-path recipient number-id resolutions and fence any in-flight lookups. The pairs a send asked
+   * about go with them: the socket that was to answer is gone, so the next send asks again.
+   */
   clearNumberIdCache(): void {
     this.numberIdCacheGeneration++;
     this.numberIdCache.clear();
     this.numberIdInFlight.clear();
+    this.lidConfirmations.clear();
   }
 
   private resolveNumberIdCached(jid: string, sock: WASocket): Promise<string | null> {
@@ -616,7 +647,8 @@ export class BaileysMessaging {
           }
         : {}),
     });
-    const sent = await this.send(jid, content, options, socket, true);
+    const renamed: RenamedRecipient = {};
+    const sent = await this.send(jid, content, options, socket, true, renamed);
     if (sent) {
       void this.host.putStoredMessage(sent)?.catch(err =>
         this.host.logger.warn('Failed to persist sent message to store', {
@@ -626,10 +658,13 @@ export class BaileysMessaging {
       this.host.recordMessage(sent, 'text');
       // Parity with the wwjs engine's message_create → message.sent (see emitOwnSendEcho).
       void this.emitOwnSendEcho(sent);
+      this.confirmLidAfterSend(renamed.phone ?? chatId, renamed.jid ?? jid, socket);
     }
     return {
       id: sent?.key?.id ?? '',
       timestamp: this.host.toUnixSeconds(sent?.messageTimestamp),
+      ...(renamed.phone ? { resolvedChatId: renamed.phone } : {}),
+      ...this.deliveredChat(chatId, renamed.to ?? jid),
     };
   }
 
@@ -920,7 +955,13 @@ export class BaileysMessaging {
     );
   }
 
-  async replyToMessage(chatId: string, quotedMsgId: string, text: string, mentions?: string[]): Promise<MessageResult> {
+  async replyToMessage(
+    chatId: string,
+    quotedMsgId: string,
+    text: string,
+    mentions?: string[],
+    options?: { quotedChatId?: string },
+  ): Promise<MessageResult> {
     this.ensureReadyToSend();
     const socket = this.sock();
     const quoted = await this.requireStored(quotedMsgId);
@@ -930,7 +971,7 @@ export class BaileysMessaging {
     // contextInfo rather than rejecting it (Utils/messages.js), so the adapter is the only guard.
     // NOT applied to quoteOption: cross-chat quoting on the send-* routes is deliberate and
     // published in docs/06.
-    await this.assertStoredInChat(quoted, chatId, quotedMsgId, socket);
+    await this.assertStoredInChat(quoted, options?.quotedChatId ?? chatId, quotedMsgId, socket);
     return this.sendContent(chatId, { text, ...this.withMentions(mentions) }, { quoted }, socket);
   }
 
@@ -995,7 +1036,7 @@ export class BaileysMessaging {
     );
   }
 
-  async deleteMessage(chatId: string, messageId: string, forEveryone = true): Promise<void> {
+  async deleteMessage(chatId: string, messageId: string, forEveryone = true): Promise<{ engineChatId: string }> {
     this.host.ensureReady();
     const socket = this.sock();
     // A message already deleted for everyone can still be deleted for me: that clears its placeholder.
@@ -1007,19 +1048,28 @@ export class BaileysMessaging {
     // list shows no row for the account proves nothing either way, so the revoke still goes out there.
     // Whichever branch runs, the text leaves this account's view, so clear the preview immediately.
     const chatJid = target.key.remoteJid ?? chatId;
-    // The preview of a received broadcast-list message is kept in its sender's chat.
+    // The preview of a received broadcast-list message is kept in its sender's chat, and its events report it there.
     const previewJid = baileysChatJid(chatJid, target.key.participant, target.key.fromMe === true);
     if (
       forEveryone &&
       (target.key.fromMe === true || (await this.selfIsGroupAdmin(target.key.remoteJid, socket)) !== false)
     ) {
-      await this.send(await this.toDeliverableJid(chatId, socket), { delete: target.key }, undefined, socket);
+      const sent = await this.send(
+        await this.toDeliverableJid(chatId, socket),
+        { delete: target.key },
+        undefined,
+        socket,
+      );
       this.host.recordMessageEdit(previewJid, messageId, '', 'revoked');
       // Clear the stored copy before the buffered echo arrives. Record the deletion first so it
       // survives a failed store write or a repeat delivery of the original.
       this.host.markDeletedForEveryone(messageId);
-      await this.changeStored(messageId, stored => ({ ...stored, message: null }));
-      return;
+      await this.changeStored(messageId, sent?.key?.id, stored => ({ ...stored, message: null }), {
+        kind: 'blank',
+        envelope: target.key,
+        anyAuthor: true,
+      });
+      return { engineChatId: this.host.toNeutralJid(previewJid) };
     }
     // Delete-for-me (revoke on this device only): Baileys exposes it as a chat modification, not a
     // sendMessage. The stored message timestamp (epoch seconds) is part of the payload.
@@ -1039,6 +1089,7 @@ export class BaileysMessaging {
       'the delete-for-me',
     );
     this.host.recordMessageEdit(previewJid, messageId, '', 'revoked');
+    return { engineChatId: this.host.toNeutralJid(previewJid) };
   }
 
   /**
@@ -1095,20 +1146,29 @@ export class BaileysMessaging {
     // protocolMessage edit envelope, so an edit can re-tag participants. An edit REPLACES the
     // content, so omitting mentions drops whatever tags the original carried.
     const editContent = { text: body, ...this.withMentions(mentions), edit: target.key };
-    await this.send(jid, this.previewSafe(editContent), this.previewSafeOptions(editContent), socket);
+    const sent = await this.send(jid, this.previewSafe(editContent), this.previewSafeOptions(editContent), socket);
     // Update the preview and raw copy immediately, ahead of the buffered echo.
     this.host.recordMessageEdit(target.key.remoteJid ?? chatId, messageId, body);
     // A later quote must carry the updated text even before the edit's echo arrives.
-    await this.changeStored(messageId, stored => {
-      const content = b.normalizeMessageContent(stored.message ?? undefined);
-      return content && setBaileysText(content, body) ? stored : null;
-    });
+    await this.changeStored(
+      messageId,
+      sent?.key?.id,
+      stored => {
+        const content = b.normalizeMessageContent(stored.message ?? undefined);
+        return content && setBaileysText(content, body) ? stored : null;
+      },
+      { kind: 'text', envelope: target.key, anyAuthor: false, body },
+    );
     // Both fields describe the EDITED MESSAGE, not the protocol envelope that carried the edit.
     // That envelope has an id and a send time of its own; answering with either would name something
     // no route can address and no stored row is keyed by, and would disagree with the
     // whatsapp-web.js engine, which re-reads the message and reports the original of both. An edit
     // does not move a message in the chat, so its timestamp is still the one it was sent at.
-    return { id: messageId, timestamp: this.host.toUnixSeconds(target.messageTimestamp) };
+    return {
+      id: messageId,
+      timestamp: this.host.toUnixSeconds(target.messageTimestamp),
+      engineChatId: this.host.toNeutralJid(target.key.remoteJid ?? chatId),
+    };
   }
 
   /**
@@ -1155,6 +1215,70 @@ export class BaileysMessaging {
       if (error instanceof EngineTransportError) throw new EngineNotSentError(error.message);
       return pn; // LID resolution is best-effort; the phone destination must still be canonical.
     }
+  }
+
+  /**
+   * After a send addressed to a phone id went out to the contact's LID, ask WhatsApp which LID it holds for that
+   * phone, and record the pair as reported only when the answer names the LID the send used. The phone is the one
+   * the number check answered when that is not the one the caller wrote. The resolution above
+   * read Baileys' own mapping, which is display data, and the send going through proves nothing about the pair:
+   * until it is reported, the row stored under the phone id is not part of the chat listed under the LID. Runs
+   * after the send and off its path, so a query WhatsApp refuses, throttles or never answers costs the send nothing.
+   * A rate-limited query stops the asking for LID_CONFIRMATION_TTL_MS, for every contact of the session.
+   */
+  private confirmLidAfterSend(chatId: string, jid: string, expected?: WASocket): void {
+    const { kind, userPart: phone } = parseWaId(chatId);
+    const { kind: sentTo, userPart: lid } = parseWaId(jid);
+    // A user part that is not a number (an agent suffix, a '+') is not what WhatsApp would answer under.
+    if (kind !== 'user' || sentTo !== 'lid' || !isIndividualWid(chatId)) return;
+    const now = Date.now();
+    // Not entered below either: a contact skipped while WhatsApp is turning the query away is asked about later.
+    if (now < this.lidConfirmationPausedUntil) return;
+    const pair = `${lid}:${phone}`;
+    const asked = this.lidConfirmations.get(pair);
+    if (asked && now - asked.at < LID_CONFIRMATION_TTL_MS) return;
+    const ask = { at: now };
+    // Entered anew, so the map stays ordered by the last ask and the cap drops the pair asked about longest ago.
+    this.lidConfirmations.delete(pair);
+    this.lidConfirmations.set(pair, ask);
+    if (this.lidConfirmations.size > LID_CONFIRMATION_MAX_ENTRIES) {
+      const [oldest] = this.lidConfirmations.keys();
+      this.lidConfirmations.delete(oldest);
+    }
+    void this.lidConfirmationGate
+      .run(async () => {
+        // The pair was asked about again while this ask waited, or forgotten with its socket: the turn is not its own.
+        if (this.lidConfirmations.get(pair) !== ask) return;
+        // It waited behind the query WhatsApp rate-limited.
+        if (Date.now() < this.lidConfirmationPausedUntil) return;
+        const socket = this.sock(expected);
+        // Bounded like the query: a read that never came back would keep every later confirmation waiting.
+        const reported = await withQueryDeadline(
+          Promise.resolve(this.host.findPersistedLidPhone?.(`${lid}@lid`)),
+          this.queryBudgetMs,
+          'The phone the LID is reported with was not read in time',
+        );
+        if (reported === phone) return;
+        const library = await this.host.loadLib();
+        this.sock(socket);
+        const confirmed = await queryLidPhone(socket, library, phone, lid, this.queryBudgetMs).catch(
+          (error: unknown) => {
+            // Set while the gate is still held: asking about the next contact would add to what WhatsApp is refusing.
+            if (error instanceof EngineThrottledError) {
+              this.lidConfirmationPausedUntil = Date.now() + LID_CONFIRMATION_TTL_MS;
+            }
+            throw error;
+          },
+        );
+        // A socket replaced or stopped since the query left must not record what the old one was told.
+        this.sock(socket);
+        if (confirmed) this.host.recordLidMapping(`${lid}@lid`, `${phone}@s.whatsapp.net`);
+      })
+      .catch((error: unknown) =>
+        this.host.logger.warn('Could not confirm the LID a send went out to; the pair stays display data', {
+          error: String(error),
+        }),
+      );
   }
 
   /**
@@ -1222,7 +1346,8 @@ export class BaileysMessaging {
       typeof content === 'function' ? async () => this.previewSafe(await content()) : this.previewSafe(content);
     const ephemeral = this.withEphemeral(jid, options);
     const merged = typeof safe === 'function' ? ephemeral : this.previewSafeOptions(safe, ephemeral);
-    const sent = await this.send(jid, safe, merged, expected, true);
+    const renamed: RenamedRecipient = {};
+    const sent = await this.send(jid, safe, merged, expected, true, renamed);
     if (sent) {
       void this.host.putStoredMessage(sent)?.catch(err =>
         this.host.logger.warn('Failed to persist sent message to store', {
@@ -1251,8 +1376,20 @@ export class BaileysMessaging {
       // and off the response path. No media re-download: the API caller already holds the
       // payload and the REST send path persists it (wwjs, by contrast, does download it on its echo).
       void this.emitOwnSendEcho(sent);
+      this.confirmLidAfterSend(renamed.phone ?? chatId, renamed.jid ?? jid, expected);
     }
-    return { id: sent?.key?.id ?? '', timestamp: this.host.toUnixSeconds(sent?.messageTimestamp) };
+    return {
+      id: sent?.key?.id ?? '',
+      timestamp: this.host.toUnixSeconds(sent?.messageTimestamp),
+      ...(renamed.phone ? { resolvedChatId: renamed.phone } : {}),
+      ...this.deliveredChat(chatId, renamed.to ?? jid),
+    };
+  }
+
+  /** The chat a send went to, when it is not the one the caller named (the contact's LID, or the number resolved). */
+  private deliveredChat(chatId: string, jid: string): Pick<MessageResult, 'engineChatId'> {
+    const engineChatId = this.host.toNeutralJid(jid);
+    return engineChatId === this.host.toNeutralJid(chatId) ? {} : { engineChatId };
   }
 
   /**
@@ -1271,6 +1408,10 @@ export class BaileysMessaging {
    *
    * `content` may be a function, for content that costs work to build (a link preview image): it is
    * called after the recipient check, and its own errors are not send refusals.
+   *
+   * `renamed` is filled when the number check answered another number than `jid` names (WhatsApp holds some
+   * numbers under other digits than people type): the message goes to that number, or to its LID, and a caller
+   * that stores the message files it there.
    */
   private async send(
     jid: string,
@@ -1278,6 +1419,7 @@ export class BaileysMessaging {
     options?: Parameters<WASocket['sendMessage']>[2],
     expected?: WASocket,
     applyEphemeral = false,
+    renamed?: RenamedRecipient,
   ): Promise<WAMessage | undefined> {
     const sock = this.sock(expected);
     const recipient = parseWaId(jid);
@@ -1309,6 +1451,8 @@ export class BaileysMessaging {
       if (canonical !== jid) {
         jid = await this.toDeliverableJid(numberId, sock);
         if (applyEphemeral) options = this.withEphemeral(jid, options);
+        if (renamed && parseWaId(numberId).kind === 'user') Object.assign(renamed, { phone: numberId, jid });
+        if (renamed) renamed.to = jid;
       }
     }
     const message = typeof content === 'function' ? await content() : content;
@@ -1420,11 +1564,29 @@ export class BaileysMessaging {
     return copy;
   }
 
-  /** Apply a change this session just made to the stored copy. Best-effort: the change already went out. */
-  private async changeStored(messageId: string, change: (stored: WAMessage) => WAMessage | null): Promise<void> {
+  /**
+   * Apply a change this session just made to the stored copy. The change already went out, so a store that cannot
+   * answer keeps it (`kept`, the same change as data) to apply once it does: a delete the copy missed would leave the
+   * taken-back text in it to quote, forward or resend.
+   */
+  private async changeStored(
+    messageId: string,
+    changeId: string | null | undefined,
+    change: (stored: WAMessage) => WAMessage | null,
+    kept: StoredChange,
+  ): Promise<void> {
     try {
       await this.host.updateStoredMessage(messageId, change);
     } catch (err) {
+      if (isDatabaseUnavailable(err) && this.host.keepStoredChange) {
+        this.host.logger.warn('Keeping an edit or delete of a stored copy, to apply it once the store answers', {
+          msgId: messageId,
+          kind: kept.kind,
+          error: err instanceof Error ? err.message : String(err),
+          action: 'baileys_copy_change_kept',
+        });
+        return this.host.keepStoredChange(messageId, changeId || `${messageId}:${kept.kind}`, kept);
+      }
       this.host.logger.warn('Failed to apply an edit or delete to the message store', {
         msgId: messageId,
         error: err instanceof Error ? err.message : String(err),

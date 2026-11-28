@@ -125,6 +125,28 @@ describe('IngressReconcilerService.sweep', () => {
     expect(replayed).toMatchObject({ deliveryId: 'body-specific-key', payload: { providerDeliveryId: 'provider-17' } });
   });
 
+  // SQLite serves every caller on one connection: a write another request makes while an implicit save
+  // transaction is open becomes part of it, and the rollback of a failed insert would discard it too.
+  it('does not roll back a concurrent write when writing a dead letter fails', async () => {
+    await insertEvent({ dispatchAttempts: 4 });
+    enqueue.mockResolvedValue({ outcome: 'failed', error: 'unavailable' });
+    const instances = ds.getRepository(PluginInstance);
+    let beside = Promise.resolve();
+    ds.subscribers.push({
+      listenTo: () => IntegrationDeliveryFailure,
+      beforeInsert: () => {
+        beside = (async () => {
+          await instances.update('plug:inst', { enabled: false });
+        })();
+        throw new Error('abort dead letter');
+      },
+    });
+
+    expect(await service.sweep(OPTS)).toMatchObject({ scanned: 1, skipped: 1 });
+    await beside;
+    expect((await instances.findOneByOrFail({ id: 'plug:inst' })).enabled).toBe(false);
+  });
+
   it('replays a stale pending event with its original deliveryId as jobId, then marks it dispatched', async () => {
     const id = await insertEvent();
 

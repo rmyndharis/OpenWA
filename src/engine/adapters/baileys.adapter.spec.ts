@@ -184,6 +184,8 @@ jest.mock('@whiskeysockets/baileys', () => ({
     }
   },
   getContentType: jest.fn(() => 'conversation'),
+  // Plain JSON stands in for the library's Buffer-aware replacer and reviver.
+  BufferJSON: { replacer: (_key: string, value: unknown) => value, reviver: (_key: string, value: unknown) => value },
   // What Baileys counts as unread: every message of these tests is real content, so this is identity-true.
   isRealMessage: jest.fn(() => true),
   // The chat a message is filed under: its own, or the sender's for a broadcast list; without a device suffix.
@@ -216,6 +218,9 @@ jest.mock('@whiskeysockets/baileys', () => ({
       ProtocolMessage: {
         Type: { REVOKE: 0, MESSAGE_EDIT: 14 },
       },
+      SecretEncryptedMessage: { SecretEncType: { UNKNOWN: 0, EVENT_EDIT: 1, MESSAGE_EDIT: 2 } },
+      // A kept message's content is revived into the protocol's classes; plain objects stand in for them here.
+      fromObject: (content: unknown) => content,
     },
     // namespace proto.PinInChat { enum Type } — WAProto/index.d.ts
     PinInChat: { Type: { UNKNOWN_TYPE: 0, PIN_FOR_ALL: 1, UNPIN_FOR_ALL: 2 } },
@@ -268,6 +273,7 @@ const fakeStore = {
   getMessage: jest.fn(),
   getMessages: jest.fn().mockResolvedValue([]),
   clearSession: jest.fn().mockResolvedValue(undefined),
+  hideUpTo: jest.fn(),
   update: jest.fn().mockResolvedValue(undefined),
   remove: jest.fn().mockResolvedValue(undefined),
 };
@@ -561,12 +567,60 @@ describe('BaileysAdapter lifecycle & status', () => {
     }
   });
 
+  it('on a logged-out close: drops what the session keeps for the store before it clears the store', async () => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    try {
+      const order: string[] = [];
+      const adapter = newAdapter();
+      await adapter.initialize(noopCallbacks({ onStoredAccountCleared: () => order.push('dropped') }));
+      fakeStore.clearSession.mockImplementationOnce(() => {
+        order.push('cleared');
+        return Promise.resolve();
+      });
+      fakeSock.fire('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 401 } } },
+      });
+      await new Promise(r => setImmediate(r));
+      expect(order).toEqual(['dropped', 'cleared']);
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
+  it('on a logged-out close: keeps a clear of the stored messages the database refused, up to the unlink', async () => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    try {
+      const onStoredAccountWipeRefused = jest.fn();
+      await newAdapter().initialize(noopCallbacks({ onStoredAccountWipeRefused }));
+      fakeStore.clearSession.mockRejectedValueOnce(
+        Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }),
+      );
+      fakeSock.fire('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 401 } } },
+      });
+      await new Promise(r => setImmediate(r));
+      await new Promise(r => setImmediate(r));
+
+      // The first try clears everything, as an unlink always did; what it could not clear is hidden up to now.
+      expect(fakeStore.clearSession.mock.calls).toEqual([['db-uuid-1']]);
+      expect(onStoredAccountWipeRefused).toHaveBeenCalledTimes(1);
+      const [[{ raw }]] = onStoredAccountWipeRefused.mock.calls as Array<[{ raw: string }]>;
+      const cutoff = new Date((JSON.parse(raw) as { before: string }).before);
+      expect(fakeStore.hideUpTo).toHaveBeenCalledWith('db-uuid-1', cutoff);
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
   it('on a logged-out close: clears the stored messages, as an API logout does', async () => {
     const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
     try {
       const onDisconnected = jest.fn();
+      const onStoredAccountWipeRefused = jest.fn();
       const adapter = newAdapter();
-      await adapter.initialize(noopCallbacks({ onDisconnected }));
+      await adapter.initialize(noopCallbacks({ onDisconnected, onStoredAccountWipeRefused }));
       fakeStore.clearSession.mockRejectedValueOnce(new Error('SQLITE_BUSY'));
       fakeSock.fire('connection.update', {
         connection: 'close',
@@ -576,6 +630,8 @@ describe('BaileysAdapter lifecycle & status', () => {
       expect(fakeStore.clearSession).toHaveBeenCalledWith('db-uuid-1');
       // A store failure does not turn the unlink into a failed cleanup.
       expect(onDisconnected).toHaveBeenCalledWith('logged out');
+      // Nor is a failure of its own kept to run again: only a database that cannot answer is.
+      expect(onStoredAccountWipeRefused).not.toHaveBeenCalled();
     } finally {
       rmSpy.mockRestore();
     }
@@ -4596,6 +4652,14 @@ describe('BaileysAdapter inbound fan-out', () => {
       await adapter.deleteMessage('628222@c.us', 'L1', false);
       expect(await preview(adapter)).toBe('');
     });
+
+    it.each([
+      ['its sender', '628222@c.us'],
+      ['its list', LIST],
+    ])('reports the chat of its sender for a delete naming %s', async (_name, chatId) => {
+      const adapter = await receive();
+      await expect(adapter.deleteMessage(chatId, 'L1', false)).resolves.toEqual({ engineChatId: '628222@c.us' });
+    });
   });
 
   describe('contentless protocol traffic on the live path (#1568)', () => {
@@ -5171,6 +5235,16 @@ describe('BaileysAdapter store-backed ops', () => {
     );
   });
 
+  it('reports the LID a message is stored under when a delete or edit names its phone number', async () => {
+    const adapter = await ready();
+    fakeStore.getMessage.mockResolvedValue({ ...ownStored, key: { ...ownStored.key, remoteJid: '111@lid' } });
+    fakeSock.executeUSyncQuery.mockResolvedValue({ list: [{ id: '628111@s.whatsapp.net', lid: '111@lid' }] });
+    await expect(adapter.editMessage('628111@c.us', 'TARGET', 'edited')).resolves.toMatchObject({
+      engineChatId: '111@lid',
+    });
+    await expect(adapter.deleteMessage('628111@c.us', 'TARGET', true)).resolves.toEqual({ engineChatId: '111@lid' });
+  });
+
   it('confirms a LID request against an older phone-keyed message through the same fresh query', async () => {
     const adapter = await ready();
     fakeStore.getMessage.mockResolvedValue({
@@ -5455,6 +5529,32 @@ describe('BaileysAdapter store-backed ops', () => {
     );
   });
 
+  it.each([
+    ['a delete for everyone', 'delete', { kind: 'blank' }],
+    ['an edit', 'edit', { kind: 'text', body: 'new text' }],
+  ] as const)(
+    'keeps %s of the stored copy the database refused, to apply it once it answers',
+    async (_l, op, change) => {
+      fakeStore.getMessage.mockResolvedValue(ownStored);
+      fakeStore.update.mockRejectedValueOnce(
+        Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }),
+      );
+      const onStoredChangeRefused = jest.fn();
+      const adapter = newAdapter();
+      await adapter.initialize({ onStoredChangeRefused });
+      fakeSock.fire('connection.update', { connection: 'open' });
+
+      if (op === 'delete') await adapter.deleteMessage('628111@s.whatsapp.net', 'TARGET', true);
+      else await adapter.editMessage('628111@s.whatsapp.net', 'TARGET', 'new text');
+
+      expect(onStoredChangeRefused).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: 'TARGET', kind: op === 'delete' ? 'blank' : 'text' }),
+      );
+      const [[{ raw }]] = onStoredChangeRefused.mock.calls as Array<[{ raw: string }]>;
+      expect(JSON.parse(raw)).toMatchObject({ messageId: 'TARGET', change: { ...change, envelope: ownStored.key } });
+    },
+  );
+
   it('deleteMessage for everyone of a message the account received deletes it for the account only', async () => {
     // WhatsApp ignores a sender revoke of somebody else's message, so sending one reported a deletion
     // that never happened. WhatsApp Web deletes it for the account instead, and so does this.
@@ -5712,7 +5812,7 @@ describe('BaileysAdapter store-backed ops', () => {
       },
       expect.objectContaining({ getUrlInfo: expect.any(Function) as unknown }) as unknown,
     );
-    expect(res).toEqual({ id: 'TARGET', timestamp: 1700000000 });
+    expect(res).toEqual({ id: 'TARGET', timestamp: 1700000000, engineChatId: '628111@c.us' });
   });
 
   it('editMessage answers from the stored message even when the send echoes nothing back', async () => {
@@ -5720,7 +5820,7 @@ describe('BaileysAdapter store-backed ops', () => {
     fakeSock.sendMessage.mockResolvedValue(undefined);
     const adapter = await ready();
     const res = await adapter.editMessage('628111@s.whatsapp.net', 'TARGET', 'edited body');
-    expect(res).toEqual({ id: 'TARGET', timestamp: 1700000000 });
+    expect(res).toEqual({ id: 'TARGET', timestamp: 1700000000, engineChatId: '628111@c.us' });
   });
 
   it('editMessage throws MessageNotFoundError when the message is not in the store', async () => {
@@ -5779,6 +5879,7 @@ describe('BaileysAdapter store-backed ops', () => {
     await expect(adapter.editMessage('628111@s.whatsapp.net', 'TARGET', 'new')).resolves.toEqual({
       id: 'TARGET',
       timestamp: 1700000000,
+      engineChatId: '628111@c.us',
     });
     expect(fakeSock.sendMessage).toHaveBeenCalledTimes(1);
   });
@@ -12412,7 +12513,7 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
     fakeStore.update.mockRejectedValueOnce(new Error('SQLITE_BUSY: database is locked'));
     const adapter = await started();
     const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
-    await expect(adapter.deleteMessage(PEER, 'TARGET', true)).resolves.toBeUndefined();
+    await expect(adapter.deleteMessage(PEER, 'TARGET', true)).resolves.toEqual({ engineChatId: '628111@c.us' });
     expect(warn).toHaveBeenCalledWith(
       'Failed to apply an edit or delete to the message store',
       expect.objectContaining({ msgId: 'TARGET', error: 'SQLITE_BUSY: database is locked' }),
@@ -14230,5 +14331,153 @@ describe('BaileysAdapter group metadata cache', () => {
       });
       expect(fakeSock.groupMetadata).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('a message whose stored target the store fails to read', () => {
+  const baileys = jest.requireMock<Record<string, jest.Mock>>('@whiskeysockets/baileys');
+  const chat = '628111@s.whatsapp.net';
+  const turns = async (): Promise<void> => {
+    for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r));
+  };
+
+  beforeEach(() => {
+    fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
+    fakeSock.resetEmitter();
+    jest.clearAllMocks();
+    baileys.getContentType.mockImplementation(realGetContentType);
+    baileys.normalizeMessageContent.mockImplementation((c: unknown) => c);
+    fakeStore.getMessage.mockRejectedValue(
+      Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }),
+    );
+  });
+
+  it('is handed to the session as the engine keeps it, and read again only once the session is connected', async () => {
+    const onInboundUnreadable = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onInboundUnreadable });
+    const edit = {
+      key: { remoteJid: chat, fromMe: false, id: 'ENV-A' },
+      message: {
+        secretEncryptedMessage: {
+          targetMessageKey: { id: 'M1', remoteJid: chat, fromMe: false },
+          encPayload: 'eA==',
+          encIv: 'eA==',
+          secretEncType: 2,
+        },
+      },
+      messageTimestamp: 1700000060,
+    };
+
+    fakeSock.fire('messages.upsert', { type: 'notify', messages: [edit] });
+    await turns();
+
+    expect(onInboundUnreadable).toHaveBeenCalledWith({ messageId: 'ENV-A', raw: JSON.stringify(edit), targetId: 'M1' });
+    await expect(adapter.redeliverInbound(JSON.stringify(edit))).resolves.toBe(false);
+    fakeSock.fire('connection.update', { connection: 'open' });
+    await expect(adapter.redeliverInbound(JSON.stringify(edit))).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+    expect(onInboundUnreadable).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['its read of the event failed', false],
+    ['the store does not hold its event yet, its copy kept to be written', true],
+  ] as const)('keeps an RSVP the library could not decrypt because %s', async (_l, copyKept) => {
+    if (copyKept) fakeStore.getMessage.mockResolvedValue(null);
+    const onInboundUnreadable = jest.fn();
+    await newAdapter().initialize({ onInboundUnreadable, isStoredCopyKept: id => copyKept && id === 'EV1' });
+    const [[{ getMessage }]] = baileys.default.mock.calls as Array<
+      [{ getMessage: (key: { remoteJid?: string; id?: string }) => Promise<unknown> }]
+    >;
+    const eventKey = { remoteJid: chat, fromMe: false, id: 'EV1' };
+
+    // The library reads the event with the key the RSVP carries, before the RSVP reaches the adapter.
+    if (copyKept) await expect(getMessage(eventKey)).resolves.toBeUndefined();
+    else await expect(getMessage(eventKey)).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: chat, fromMe: false, id: 'RSVP-A' },
+          message: {
+            encEventResponseMessage: { eventCreationMessageKey: eventKey, encPayload: 'eA==', encIv: 'eA==' },
+          },
+          messageTimestamp: 1700000061,
+        },
+      ],
+    });
+    await turns();
+
+    expect(onInboundUnreadable).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'RSVP-A' }));
+  });
+
+  it('keeps the copy of a message the store refused, and writes it back, blank once it was deleted for everyone', async () => {
+    const onStoredCopyRefused = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onStoredCopyRefused, onMessage: jest.fn() });
+    const received = (id: string) => ({
+      key: { remoteJid: chat, fromMe: false, id },
+      message: { conversation: 'hello', messageContextInfo: { messageSecret: 'cw==' } },
+      messageTimestamp: 1700000062,
+    });
+    fakeStore.put.mockRejectedValueOnce(
+      Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }),
+    );
+    fakeStore.put.mockRejectedValueOnce(new Error('CHECK constraint failed'));
+
+    fakeSock.fire('messages.upsert', { type: 'notify', messages: [received('M1'), received('M2')] });
+    await turns();
+
+    // Kept only for a database that cannot answer, not for a write it refused for a reason of its own.
+    expect(onStoredCopyRefused.mock.calls).toEqual([[{ messageId: 'M1', raw: JSON.stringify(received('M1')) }]]);
+    fakeStore.put.mockReset().mockResolvedValue(undefined);
+    await expect(adapter.restoreStoredCopy(JSON.stringify(received('M1')), false)).resolves.toBe(true);
+    await expect(adapter.restoreStoredCopy(JSON.stringify(received('M1')), true)).resolves.toBe(true);
+    expect(fakeStore.put.mock.calls).toEqual([
+      ['db-uuid-1', received('M1')],
+      ['db-uuid-1', { ...received('M1'), message: null }],
+    ]);
+  });
+
+  it('keeps a delete the store refused for a stored copy, and applies it to the copy once the store answers', async () => {
+    const onStoredChangeRefused = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onStoredChangeRefused, onMessageRevoked: jest.fn() });
+    fakeStore.update.mockRejectedValueOnce(
+      Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }),
+    );
+
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: chat, fromMe: false, id: 'REV-1' },
+          message: { protocolMessage: { type: 0, key: { remoteJid: chat, fromMe: false, id: 'M1' } } },
+          messageTimestamp: 1700000063,
+        },
+      ],
+    });
+    await turns();
+
+    expect(onStoredChangeRefused).toHaveBeenCalledWith({
+      messageId: 'M1',
+      changeId: 'REV-1',
+      kind: 'blank',
+      raw: expect.any(String) as unknown,
+    });
+    const stored = { key: { remoteJid: chat, fromMe: false, id: 'M1' }, message: { conversation: 'hello' } };
+    fakeStore.getMessage.mockReset().mockResolvedValue(stored);
+    let written: unknown;
+    fakeStore.update
+      .mockReset()
+      .mockImplementation((_session: string, _id: string, change: (m: unknown) => unknown) => {
+        written = change(stored);
+        return Promise.resolve();
+      });
+    const [[{ raw }]] = onStoredChangeRefused.mock.calls as Array<[{ raw: string }]>;
+
+    await expect(adapter.restoreStoredChange(raw)).resolves.toBe(true);
+
+    expect(written).toEqual({ ...stored, message: null });
   });
 });

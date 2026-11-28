@@ -28,6 +28,24 @@
 > lease lapses, and both engines run until the holder's first successful renewal after it
 > reconnects, so the overlap lasts as long as the outage plus up to one heartbeat.
 >
+> Changes a node keeps while the database is away follow the same limit. They hold that node's
+> deliveries of their messages, and once the database answers again every sweep waits one grace period
+> (`WEBHOOK_RECONCILE_GRACE_MS`) so they land first. A node partitioned from the database cannot hold
+> a healthy peer's sweep, which may replay a delivery of a message the partitioned node is about to
+> withdraw. The recovery journal (`RECOVERY_JOURNAL_PATH`) belongs to one process: never share the file.
+> A delivery queued while its outbox row could not be written has its copy only in the memory of the node that
+> queued it, which writes what a worker of another node needs into the job itself: the copy as a change left it
+> (withdrawn, the placeholder of a delete through the API, or the edited text, or dropped by its bound, which stops
+> the job and records it as a delivery failure), and, while it keeps a change of
+> the message the database has not taken, a hold it renews every 20 s as a 60 s lease, so a node that stopped
+> holds the job no longer than that. The lease is a key Redis expires itself, so no node's clock is read against
+> another's; a worker that cannot ask Redis for it waits, spending no attempt. With
+> neither, the worker judges the job by the message's stored rows: nothing is sent once any row under the id was
+> taken back, and an edit is sent from a row judged the message's own (lid and phone of one contact only once the
+> pair is reported). Not covered: a change landing during an attempt already under way, a write Redis has not
+> taken yet (`webhook_job_mark_failed`, tried again every 20 s), and an edit of a message whose author's lid and
+> phone are not reported as a pair, whose job then sends the text from before the edit, followed by `message.edited`.
+>
 > Bulk-send batches follow the same rule. A batch is only ever driven by the process
 > holding its session's engine, so a booting replica now reaps only the batches whose
 > sessions it may claim, instead of declaring a peer's in-flight batches FAILED while they
@@ -180,7 +198,10 @@
 > where a claim may already have been released) and confirm live row ownership before launching
 > reconnect engines or emitting external side effects. When a peer takes over a row mid-flight, a
 > stale node's write matches zero rows and suppresses status, QR, ready, disconnect, restriction,
-> reconnect-loop, and error webhooks, WebSocket events, audits, and hooks.
+> reconnect-loop, and error webhooks, WebSocket events, audits, and hooks. A write that fails with a
+> database error proves nothing about the owner: it is logged, and the QR, ready and disconnect
+> notifications still go out while this node owns the session and the engine is the live one, as does
+> the `session:error` hook of a failed or given-up session while this node owns it.
 >
 > **Forwarded requests can be single-counted with `SESSION_PROXY_SECRET`.** Without
 > `SESSION_PROXY_SECRET`, a forwarded request is throttled on both nodes: the receiving node counts
@@ -211,8 +232,9 @@
 > lightweight Redis presence lease (`openwa:ws:restricted-nodes` set plus a 30-second per-node TTL
 > key refreshed every 10 seconds and removed on disconnect or shutdown). When Redis confirms zero
 > restricted nodes exist cluster-wide, emitting nodes skip `lid_mappings` lookups and chat-room
-> fan-out completely. If the Redis presence client is absent, disconnected, or errors, the emitting
-> node fails open and expands the chat so restricted subscribers on peers never miss events. When
+> fan-out completely. If the Redis presence client is absent, disconnected, or errors, or Redis
+> refuses writes (over `maxmemory`, or a read-only replica), the emitting node fails open and
+> expands the chat so restricted subscribers on peers never miss events. When
 > chat-restricted expansion runs (because this node or a peer holds a restricted socket, or during a
 > fail-open fallback), an event of a one-to-one chat costs the emitting node one or two `lid_mappings`
 > lookups (one for a `@lid` chat, none for a group). Events about one chat of one session that are
@@ -364,7 +386,7 @@ version: '3.8'
 services:
   openwa:
     image: ghcr.io/rmyndharis/openwa:latest
-    # Teardown takes up to 75 s with every datastore on; raise this by the amount SHUTDOWN_DELAY_MS or
+    # Teardown takes up to 76 s with every datastore on; raise this by the amount SHUTDOWN_DELAY_MS or
     # WEBHOOK_SHUTDOWN_DRAIN_MS exceeds its default, or the 10 s default kills the task mid-teardown.
     stop_grace_period: 90s
     deploy:
@@ -423,7 +445,12 @@ services:
     image: redis:7-alpine
     deploy:
       replicas: 1
-    command: redis-server --appendonly yes --maxmemory-policy noeviction
+      resources:
+        limits:
+          memory: 512M
+    # maxmemory at half the limit, like the bundled container: a full Redis refuses new jobs (the
+    # gateway then delivers directly) instead of being OOM-killed while an AOF rewrite copies pages.
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
     volumes:
       - redis-data:/data
     networks:
@@ -529,7 +556,7 @@ spec:
       labels:
         app: openwa
     spec:
-      # The teardown can take up to 75 s on a clustered replica (src/common/services/shutdown-budget.ts), so
+      # The teardown can take up to 76 s on a clustered replica (src/common/services/shutdown-budget.ts), so
       # Kubernetes' default grace of 30 s would SIGKILL a slow stop half way. Match the shipped chart.
       terminationGracePeriodSeconds: 90
       # OS-level containment is defence in depth for the plugin sandbox (see docs/30-plugin-sandboxing.md):

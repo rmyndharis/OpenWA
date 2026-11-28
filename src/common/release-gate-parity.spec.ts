@@ -288,6 +288,88 @@ describe('release gate jobs can stop the publish jobs', () => {
 });
 
 /**
+ * A tag can be pushed on any commit, and a stable tag moves `latest` on both registries, so the lint job every
+ * publisher waits for refuses a tagged commit that main does not hold. Its step runs here as the runner runs it,
+ * in a checkout made the way actions/checkout makes one for a tag: the tag alone, one commit deep.
+ */
+describe('a tag publishes only a commit that main holds', () => {
+  type LintStep = { name?: string; run?: string; if?: unknown; 'continue-on-error'?: unknown };
+  const STEP = 'Verify the tagged commit is on main';
+  const GIT_ENV = {
+    PATH: process.env.PATH ?? '',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_AUTHOR_NAME: 'Release Spec',
+    GIT_AUTHOR_EMAIL: 'release-spec@example.invalid',
+    GIT_COMMITTER_NAME: 'Release Spec',
+    GIT_COMMITTER_EMAIL: 'release-spec@example.invalid',
+  };
+  const git = (cwd: string, ...args: string[]): void => {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: GIT_ENV });
+    if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  };
+  const lintSteps = (): LintStep[] => jobSteps('release.yml', 'lint');
+
+  // main: base, v1.0.0, v1.1.0 (its tip). A branch from v1.0.0 that never merged holds v1.0.1.
+  let root = '';
+  let origin = '';
+  beforeAll(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'release-on-main-'));
+    const work = path.join(root, 'work');
+    origin = path.join(root, 'origin.git');
+    fs.mkdirSync(work);
+    const commitAndTag = (tag?: string): void => {
+      git(work, 'commit', '-q', '--allow-empty', '-m', tag ?? 'base');
+      if (tag) git(work, 'tag', '-a', tag, '-m', tag);
+    };
+    git(work, 'init', '-q', '-b', 'main');
+    commitAndTag();
+    commitAndTag('v1.0.0');
+    commitAndTag('v1.1.0');
+    git(work, 'checkout', '-q', '-b', 'unmerged', 'v1.0.0');
+    commitAndTag('v1.0.1');
+    git(root, 'clone', '-q', '--bare', work, origin);
+  });
+  afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const runFor = (tag: string): { status: number | null; output: string } => {
+    const checkout = fs.mkdtempSync(path.join(root, 'checkout-'));
+    git(checkout, 'init', '-q');
+    git(checkout, 'remote', 'add', 'origin', `file://${origin}`);
+    git(checkout, 'fetch', '-q', '--no-tags', '--depth=1', 'origin', `+refs/tags/${tag}:refs/tags/${tag}`);
+    git(checkout, 'checkout', '-q', '--force', `refs/tags/${tag}`);
+    const step = lintSteps().find(candidate => candidate.name === STEP);
+    // The runner's default shell for `run:` steps.
+    const result = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', step?.run ?? 'exit 0'], {
+      cwd: checkout,
+      encoding: 'utf8',
+      env: { ...GIT_ENV, GITHUB_REF_NAME: tag },
+    });
+    return { status: result.status, output: `${result.stdout}${result.stderr}` };
+  };
+
+  it('runs in the lint job before anything is installed, with nothing that lets it pass on failure', () => {
+    const steps = lintSteps();
+    const at = steps.findIndex(step => step.name === STEP);
+    expect(at).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(steps.findIndex(step => step.name === 'Install dependencies'));
+    expect(steps[at].if).toBeUndefined();
+    expect(steps[at]['continue-on-error']).toBeUndefined();
+  });
+
+  it.each(['v1.0.0', 'v1.1.0'])('passes %s, a commit on main', tag => {
+    expect(runFor(tag)).toMatchObject({ status: 0 });
+  });
+
+  it('fails a tag on a branch that main never merged', () => {
+    const result = runFor('v1.0.1');
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain("::error::Tag 'v1.0.1' points at");
+  });
+});
+
+/**
  * A tag is a prerelease or it is not, and every release channel has to agree. The image channels
  * (X.Y, latest) and the promote job treat any tag with a '-' suffix as a prerelease; when the
  * GitHub Release matched only -rc/-beta/-alpha, a tag such as v1.2.0-next.1 stayed off `latest` on

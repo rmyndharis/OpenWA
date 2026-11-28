@@ -14,19 +14,21 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * metadata, so relabelling it would render an empty call or poll bubble. The mapping is forward-only and
  * collision-free (the neutral targets were never valid raw tokens), so it is idempotent and `down` is a
  * no-op. One statement, so the table is read once. `backfill` is shared with the boot service and with
- * import-data, which restores rows from archives taken before the neutral vocabulary.
+ * import-data, which restores rows from archives taken before the neutral vocabulary, and which may narrow it to a
+ * `range` of rows.
  */
 export class BackfillLegacyMessageTypes1791300000000 implements MigrationInterface {
   name = 'BackfillLegacyMessageTypes1791300000000';
 
-  static async backfill(queryRunner: QueryRunner): Promise<void> {
+  static async backfill(queryRunner: QueryRunner, range?: string): Promise<void> {
     if (!(await queryRunner.hasTable('messages'))) return;
     await queryRunner.query(
       `UPDATE "messages" SET "type" = CASE "type" ` +
         `WHEN 'chat' THEN 'text' WHEN 'buttons_response' THEN 'text' WHEN 'list_response' THEN 'text' ` +
         `WHEN 'template_button_reply' THEN 'text' WHEN 'ptt' THEN 'voice' ` +
         `WHEN 'vcard' THEN 'contact' WHEN 'multi_vcard' THEN 'contact' END ` +
-        `WHERE "type" IN ('chat', 'buttons_response', 'list_response', 'template_button_reply', 'ptt', 'vcard', 'multi_vcard')`,
+        `WHERE "type" IN ('chat', 'buttons_response', 'list_response', 'template_button_reply', 'ptt', 'vcard', 'multi_vcard')` +
+        (range ? ` AND ${range}` : ''),
     );
   }
 

@@ -10,15 +10,17 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * chat-media orphan sweep reaps them after its grace window.
  *
  * Idempotent, and `down` is a no-op: the cleared content is not recoverable. `scrub` is shared with
- * import-data, which restores rows from archives taken before this migration ran.
+ * import-data, which restores rows from archives taken before this migration ran, and which may narrow it to a
+ * `range` of rows.
  */
 export class ScrubRevokedMessageContent1786900000000 implements MigrationInterface {
   name = 'ScrubRevokedMessageContent1786900000000';
 
-  static async scrub(queryRunner: QueryRunner): Promise<void> {
+  static async scrub(queryRunner: QueryRunner, range?: string): Promise<void> {
     if (!(await queryRunner.hasTable('messages'))) return;
     await queryRunner.query(
-      `UPDATE "messages" SET "body" = '', "metadata" = NULL, "mediaPath" = NULL, "mediaMimetype" = NULL WHERE "type" = 'revoked'`,
+      `UPDATE "messages" SET "body" = '', "metadata" = NULL, "mediaPath" = NULL, "mediaMimetype" = NULL WHERE "type" = 'revoked'` +
+        (range ? ` AND ${range}` : ''),
     );
   }
 

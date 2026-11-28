@@ -1536,26 +1536,20 @@ export const infraApi = {
     request<{ status: 'ok' | 'error'; details: Record<string, { status: string }> }>('/health/ready', { signal }),
   // Data migration: export all Data-DB tables (call while still on the OLD database, before switching),
   // then import after the switch + restart. Used by the DB-switch migration guard so data isn't lost.
+  // The body is the backup file itself and is handed over unparsed, since it can run to hundreds of
+  // megabytes. Its first member is `exportedAt` and its last is `omittedInlineMedia`, the inline
+  // media payloads the export budget refused: non-zero means the rows are all there but some of
+  // their media is not, a state a restored archive cannot express, since the omitted marker is the
+  // same one media skipped on the way in gets.
   exportData: (includePluginSecrets = false) =>
-    request<{
-      exportedAt: string;
-      dataDbType: string;
-      tables: Record<string, unknown[]>;
-      counts: Record<string, number>;
-      // Optional tables absent from an older schema. Always present in the response; a non-empty
-      // list means the backup is partial, not that those tables were empty.
-      skippedTables: string[];
-      // Inline media payloads the export budget refused. Always present; non-zero means the rows are
-      // all there but some of their media is not — a state a restored archive cannot express, since
-      // the omitted marker is the same one media skipped on the way in gets.
-      omittedInlineMedia: { messages: number; messageBatches: number };
-    }>(includePluginSecrets ? '/infra/export-data?includePluginSecrets=true' : '/infra/export-data'),
+    requestBlob(includePluginSecrets ? '/infra/export-data?includePluginSecrets=true' : '/infra/export-data'),
   // 200 contract includes the orphan-engine reconciliation result (restartRequired / notices /
   // stopped+failed ids). 409 has several causes and the error's `code` distinguishes them:
   // IMPORT_WOULD_ORPHAN_ENGINES (live engines exist for sessions the backup would remove; the
   // message lists them) is the only one the caller retries with stopOrphans=true to stop those
   // engines inside the request. IMPORT_ALREADY_RUNNING (another restore is in flight) and
   // IMPORT_NESTED_TRANSACTION (another transaction holds the connection) leave nothing to retry.
+  // 503 IMPORT_STOPPED: the gateway stopped during a SQLite restore and rolled it back.
   // force is deliberately NOT exposed: it leaves the engines writing into the restored tables until
   // a restart — the window stopOrphans exists to close.
   importData: (tables: Record<string, unknown[]>, options?: { stopOrphans?: boolean }) =>

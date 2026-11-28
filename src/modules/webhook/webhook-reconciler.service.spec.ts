@@ -45,6 +45,7 @@ describe('WebhookReconcilerService', () => {
     recordReplayExhaustion: jest.Mock;
     isQueueJobPending: jest.Mock;
     hasQueueJobCompleted: jest.Mock;
+    isMessageHeld: jest.Mock;
   };
   let webhooks: { findOne: jest.Mock };
   let service: WebhookReconcilerService;
@@ -61,11 +62,58 @@ describe('WebhookReconcilerService', () => {
       isQueueJobPending: jest.fn().mockResolvedValue(false),
       hasQueueJobCompleted: jest.fn().mockResolvedValue(false),
       isLocallyPending: jest.fn().mockReturnValue(false),
+      isMessageHeld: jest.fn().mockReturnValue(false),
     };
     webhooks = {
       findOne: jest.fn().mockResolvedValue({ id: 'wh-1', sessionId: 'sess-1', active: true, events: ['*'] }),
     };
     service = new WebhookReconcilerService(webhooks as never, outbox as never, delivery as never, new ConfigService());
+  });
+
+  it('leaves the deliveries of a message alone while a change of it is kept on this node', async () => {
+    outbox.findStale.mockResolvedValue([
+      row({ id: 'r1', idempotencyKey: 'msg_sess-1_HELD_wh-1' }),
+      row({ id: 'r2', idempotencyKey: 'msg_sess-1_FREE_wh-1' }),
+    ]);
+    delivery.isMessageHeld.mockImplementation((key: string) => key === 'msg_sess-1_HELD_wh-1');
+
+    const stats = await service.sweep(OPTS);
+
+    expect(delivery.isMessageHeld).toHaveBeenCalledWith('msg_sess-1_HELD_wh-1', 'wh-1', expect.anything());
+    expect(delivery.redeliver.mock.calls.map(([, , , key]: unknown[]) => key)).toEqual(['msg_sess-1_FREE_wh-1']);
+    expect(outbox.countAttempt).toHaveBeenCalledTimes(1);
+    expect(stats).toMatchObject({ scanned: 2, skipped: 1, replayed: 1 });
+  });
+
+  describe('a pass the database failed', () => {
+    const t0 = new Date('2026-11-27T10:00:00Z');
+    const at = (ms: number): Date => new Date(t0.getTime() + ms);
+    const failOnce = async (): Promise<void> => {
+      outbox.findStale.mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+      await expect(service.sweep(OPTS, t0)).rejects.toThrow('Connection terminated unexpectedly');
+    };
+
+    it('replays nothing for one grace period from the first pass that reads again', async () => {
+      await failOnce();
+      outbox.findStale.mockResolvedValue([row()]);
+
+      await service.sweep(OPTS, at(5_000));
+      await service.sweep(OPTS, at(5_000 + OPTS.graceMs - 1));
+      expect(delivery.redeliver).not.toHaveBeenCalled();
+      await service.sweep(OPTS, at(5_000 + OPTS.graceMs));
+
+      expect(delivery.redeliver).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds nothing back with no grace period, nor after a pass that read', async () => {
+      await failOnce();
+      outbox.findStale.mockResolvedValue([row()]);
+      await service.sweep({ ...OPTS, graceMs: 0 }, at(1));
+      expect(delivery.redeliver).toHaveBeenCalledTimes(1);
+
+      await service.sweep(OPTS, at(2));
+      expect(delivery.redeliver).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('replays a stranded delivery with the STORED idempotency key', async () => {
@@ -474,6 +522,7 @@ describe('WebhookReconcilerService', () => {
       isQueueJobPending: jest.fn().mockResolvedValue(false),
       hasQueueJobCompleted: jest.fn().mockResolvedValue(false),
       isLocallyPending: jest.fn().mockReturnValue(false),
+      isMessageHeld: jest.fn().mockReturnValue(false),
       redeliver: jest.fn().mockResolvedValue(undefined),
       recordReplayExhaustion: jest.fn().mockResolvedValue(true),
     };
@@ -518,6 +567,7 @@ describe('WebhookReconcilerService', () => {
       isQueueJobPending: jest.fn().mockResolvedValue(false),
       hasQueueJobCompleted: jest.fn().mockResolvedValue(false),
       isLocallyPending: jest.fn().mockReturnValue(false),
+      isMessageHeld: jest.fn().mockReturnValue(false),
       redeliver: jest.fn().mockResolvedValue(undefined),
       recordReplayExhaustion: jest.fn().mockResolvedValue(true),
     };

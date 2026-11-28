@@ -1,12 +1,140 @@
-import { IsNull, Not, Or, Repository } from 'typeorm';
-import { Message } from '../message/entities/message.entity';
+import { type FindOptionsWhere, In, IsNull, Like, Not, Or, Raw, Repository } from 'typeorm';
+import { Message, MessageDirection } from '../message/entities/message.entity';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { LoggerService } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { ReactionEvent, EditedMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { updateMessageMetadata } from '../message/message-metadata';
-import { mutationTargetsForeignRowPersisted, type MutationSource } from './message-mutation-guard';
+import { type MutationSource, type StoredMessageRef, storedSpellings } from './message-mutation-guard';
+import type { ContactDirectory } from '../../engine/identity/jid-candidates';
+import type { LidRowVetoes } from '../../engine/identity/lid-mapping-store.service';
+import { parseWaId } from '../../engine/identity/wa-id';
+import { judgeStoredRow, outboxPayloadPredicate, revokeSourceFor } from './message-row-judgement';
+import type { ChangeSlots, EditSlot, OwnRow } from './message-change-park';
+
+/** A judging read that worked and found no row under the id. */
+const isAbsent = (verdict: { exists: boolean; unread?: boolean }): boolean => !verdict.exists && !verdict.unread;
+
+/** What the stored row said of a change (see MessageMutationProjector.storedRowVerdict). */
+export type StoredRowVerdict = {
+  exists: boolean;
+  reason: string | null;
+  unread?: boolean;
+  row?: StoredMessageRef;
+  /** The primary key of the row the judging read found. */
+  rowId?: string;
+  moved?: boolean;
+  /** Why the row could not be read. */
+  error?: unknown;
+};
+
+/** The verdict on the row a commit inserted, which a change it held is written to by that row's key, unread. */
+export const ownRowVerdict = (own: OwnRow): StoredRowVerdict => ({ exists: true, reason: null, rowId: own.rowId });
+
+/** What a judging read that failed threw, for a caller that keeps the change: the change is never written unread. */
+export const unreadRowError = (verdict: StoredRowVerdict): unknown =>
+  verdict.error ?? new Error('The stored row could not be read');
+
+/**
+ * A stored author that is a lid with no phone reported for it, as lid_mappings holds them and the lid store judges them:
+ * no reported row, or only rows the store refuses ({@link LidRowVetoes}, bound as `:vetoUnreported`, `:vetoRevoking`
+ * and `:vetoHeld`, one JSON list each). Its user part is what precedes `@` or a `:device` suffix.
+ */
+const unpairedLid = (author: string, postgres: boolean): string => {
+  const lid = postgres
+    ? `split_part(replace(${author}, ':', '@'), '@', 1)`
+    : `substr(${author}, 1, instr(replace(${author}, ':', '@'), '@') - 1)`;
+  const reported = postgres ? '"paired"."isReported" = true' : '"paired"."isReported" = 1';
+  const lids = (list: string) =>
+    postgres ? `SELECT jsonb_array_elements_text(CAST(${list} AS jsonb))` : `SELECT "value" FROM json_each(${list})`;
+  const held = postgres
+    ? 'jsonb_array_elements(CAST(:vetoHeld AS jsonb)) AS "held"("value")'
+    : 'json_each(:vetoHeld) "held"';
+  const heldAt = (at: number) => (postgres ? `("held"."value" ->> ${at})` : `json_extract("held"."value", '$[${at}]')`);
+  return (
+    `((${author} LIKE '%@lid' OR ${author} LIKE '%@hosted.lid') AND NOT EXISTS (SELECT 1 FROM "lid_mappings" "paired" ` +
+    `WHERE "paired"."lid" = ${lid} AND "paired"."phone" IS NOT NULL AND ${reported} ` +
+    `AND "paired"."lid" NOT IN (${lids(':vetoUnreported')}) AND "paired"."lid" NOT IN (${lids(':vetoRevoking')}) ` +
+    `AND NOT EXISTS (SELECT 1 FROM ${held} WHERE ${heldAt(0)} = "paired"."lid" ` +
+    `AND (${heldAt(1)} IS NULL OR ${heldAt(1)} <> "paired"."phone"))))`
+  );
+};
+
+/**
+ * The SQL that reads an `addressed` engine ref (see MessageEngineRef.addressed) and the chat it names, from the JSON
+ * text the column holds: a JSON true is 1 to SQLite and 'true' to PostgreSQL's `->>`.
+ */
+const addressedRefSql = (postgres: boolean): { addressed: string; chat: string } =>
+  postgres
+    ? {
+        addressed: `(CAST("engineRef" AS jsonb) ->> 'addressed') = 'true'`,
+        chat: `(CAST("engineRef" AS jsonb) ->> 'chatId')`,
+      }
+    : { addressed: `json_extract("engineRef", '$.addressed') = 1`, chat: `json_extract("engineRef", '$.chatId')` };
+
+/**
+ * The row of a message the change itself names, for a write made with no row read: its chat as the change names it
+ * (or the chat an API caller named), the side and author the change implies where the rule judges them, each chat and
+ * author in every spelling the rule takes as the same entity ({@link storedSpellings}: dialects, spellings of one
+ * number, and the lid and phone reported as a pair), and no engine ref, since a row a hook moved is judged by its
+ * engine ref, which only a read applies. The row of an API send delivered to another chat than its caller addressed
+ * matches by either chat, as a read judges it. A row of another chat, side or author under the id matches none of it.
+ */
+async function claimedRow(
+  sessionId: string,
+  waMessageId: string,
+  source: MutationSource,
+  directory?: ContactDirectory,
+  postgres = false,
+  lidRowVetoes?: () => LidRowVetoes,
+): Promise<FindOptionsWhere<Message>> {
+  const group = Boolean(source.chatId?.endsWith('@g.us'));
+  const memberRevoke = source.kind === 'revoke' && group && source.fromMe === false && source.admin === false;
+  const authorOnly = source.kind === 'edit' || (source.kind === 'revoke' && !group);
+  const chats = new Set<string>();
+  for (const chat of [source.chatId, source.callerChatId]) {
+    for (const id of chat ? await storedSpellings(chat, directory) : []) chats.add(id);
+  }
+  // A change that names no chat is judged foreign by no chat, so it claims none.
+  const { addressed, chat } = addressedRefSql(postgres);
+  const where: FindOptionsWhere<Message> = chats.size
+    ? {
+        sessionId,
+        waMessageId,
+        chatId: Raw(
+          alias =>
+            `((${alias} IN (:...claimedChats) AND ("engineRef" IS NULL OR ${addressed})) ` +
+            `OR (${addressed} AND ${chat} IN (:...claimedChats)))`,
+          { claimedChats: [...chats] },
+        ),
+      }
+    : { sessionId, waMessageId, engineRef: Raw(alias => `(${alias} IS NULL OR ${addressed})`) };
+  if ((authorOnly && source.fromMe !== undefined) || memberRevoke) {
+    where.direction = source.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING;
+  }
+  if (source.author && (memberRevoke || (source.kind === 'edit' && group && source.fromMe === false))) {
+    const authors = [IsNull(), In(await storedSpellings(source.author, directory))];
+    // A member revoke is foreign only to an author it proves another, and a lid with no reported phone proves no
+    // phone so: a revoke naming such a lid takes a phone author, and one naming a phone takes such a lid.
+    const named = parseWaId(source.author);
+    if (memberRevoke && named.kind === 'lid' && !(await directory?.resolveLid(named.userPart))) {
+      authors.push(...['c.us', 's.whatsapp.net', 'hosted'].map(domain => Like(`%@${domain}`)));
+    }
+    if (memberRevoke && named.kind === 'user') {
+      const vetoes = lidRowVetoes?.() ?? { unreported: [], revoking: [], held: [] };
+      authors.push(
+        Raw(author => unpairedLid(author, postgres), {
+          vetoUnreported: JSON.stringify(vetoes.unreported),
+          vetoRevoking: JSON.stringify(vetoes.revoking),
+          vetoHeld: JSON.stringify(vetoes.held),
+        }),
+      );
+    }
+    where.author = Or(...authors);
+  }
+  return where;
+}
 
 /**
  * Applies stored-message mutations — reactions, inbound edits, REST outbound-edit echoes — behind
@@ -28,6 +156,26 @@ export class MessageMutationProjector {
     private readonly resolveLid?: (jid: string) => Promise<string | null>,
     // Told of each row whose text an edit changed, once its marker is written. Must not reject.
     private readonly onTextChanged: (sessionId: string, waMessageId: string) => Promise<void> = () => Promise.resolve(),
+    // Handed a change whose write or judging read failed, to keep and try again. Standalone, it is only logged.
+    private readonly park: (
+      sessionId: string,
+      waMessageId: string,
+      slots: ChangeSlots,
+      error: unknown,
+    ) => void | Promise<void> = (sessionId, waMessageId, _slots, error) =>
+      this.logger.error(`Failed to update message ${waMessageId} of session ${sessionId}`, String(error)),
+    // Told of a change that landed, so one kept for the message that it supersedes is let go. Awaited on the chain.
+    private readonly settled: (
+      sessionId: string,
+      waMessageId: string,
+      slots: ChangeSlots,
+    ) => void | Promise<void> = () => undefined,
+    // The lids reported for a phone, so a write with no row read takes the message stored under either.
+    private readonly lidsForPhone?: (phone: string) => Promise<string[]>,
+    // The reported rows the lid store refuses, which such a write takes as no pairing, as a read of the row would.
+    private readonly lidRowVetoes?: () => LidRowVetoes,
+    // Whether the SENT write of an API send under the id is kept to run again: its row is not under the id yet.
+    private readonly sendPending?: (sessionId: string, waMessageId: string) => boolean,
   ) {}
 
   /**
@@ -64,25 +212,67 @@ export class MessageMutationProjector {
 
   /**
    * What the stored row says of a change: whether there is one to ask, and why the change must not touch
-   * it (null when it may). A row that cannot be read is reported absent with no reason, as before.
+   * it (null when it may), with the row it read. A row that cannot be read is reported absent with no reason,
+   * as before, and marked unread, and so is no row while the SENT write of the send under the id is kept to run
+   * again: the change waits for that row instead of going on without it.
    */
-  async storedRowVerdict(
-    sessionId: string,
-    waMessageId: string,
-    source: MutationSource,
-  ): Promise<{ exists: boolean; reason: string | null }> {
+  async storedRowVerdict(sessionId: string, waMessageId: string, source: MutationSource): Promise<StoredRowVerdict> {
     if (!waMessageId) return { exists: false, reason: null };
     try {
       const row = await this.messageRepository.findOne({
         where: { sessionId, waMessageId },
-        select: { chatId: true, direction: true, author: true },
+        select: { id: true, chatId: true, direction: true, author: true, engineRef: true, from: true, to: true },
       });
-      return row
-        ? { exists: true, reason: await mutationTargetsForeignRowPersisted(row, source, this.resolveLid) }
-        : { exists: false, reason: null };
-    } catch {
+      if (row) {
+        return {
+          exists: true,
+          ...(await judgeStoredRow(row, waMessageId, source, this.resolveLid)),
+          row,
+          rowId: row.id,
+        };
+      }
+      if (this.sendPending?.(sessionId, waMessageId)) {
+        return {
+          exists: false,
+          reason: null,
+          unread: true,
+          error: new Error('The row of the send is not written yet'),
+        };
+      }
       return { exists: false, reason: null };
+    } catch (error) {
+      return { exists: false, reason: null, unread: true, error };
     }
+  }
+
+  /**
+   * Where a write made for a change may land, so that it never lands on a row the change would be judged foreign to:
+   * the row its judging read found, by primary key, as a row stored under the id since the read is not the one judged;
+   * with no row found, only a row that carries the change's own identity ({@link claimedRow}), which is how the
+   * message's own row, stored after the read, still takes it. A row that could not be read is matched by the id, as
+   * before. Null when the change is foreign to the row.
+   */
+  async writeTarget(
+    sessionId: string,
+    waMessageId: string,
+    source: MutationSource,
+    verdict: StoredRowVerdict,
+  ): Promise<FindOptionsWhere<Message> | null> {
+    if (verdict.reason) return null;
+    if (verdict.exists && verdict.rowId) return { id: verdict.rowId };
+    if (verdict.unread || verdict.exists) return { sessionId, waMessageId };
+    const resolveLid = this.resolveLid;
+    return claimedRow(
+      sessionId,
+      waMessageId,
+      source,
+      resolveLid && {
+        resolveLid: lid => resolveLid(`${lid}@lid`).catch(() => null),
+        lidsForPhone: phone => this.lidsForPhone?.(phone).catch(() => []) ?? [],
+      },
+      this.messageRepository.manager?.connection?.options?.type === 'postgres',
+      this.lidRowVetoes,
+    );
   }
 
   private async applyReaction(id: string, event: ReactionEvent, needsRow: boolean): Promise<void> {
@@ -109,20 +299,23 @@ export class MessageMutationProjector {
       // ephemeral one under STORE_EPHEMERAL_MESSAGES=false, or one that arrived before the session
       // went live) — but the notification is not: `message.reaction` is a declared webhook event and
       // the dashboard stream is the point of it, the same contract handleMessageRevoked states.
-      // A write that fails is the same case: it is logged, and the reaction goes out without the full list.
-      const metadata = await updateMessageMetadata(
-        this.messageRepository,
-        { sessionId: id, waMessageId: event.messageId },
-        current => {
-          const reactions = { ...(current.reactions as Record<string, string> | undefined) };
-          if (!event.reaction) delete reactions[event.senderId];
-          else reactions[event.senderId] = event.reaction;
-          return { ...current, reactions };
-        },
-      ).catch((err: unknown) => {
-        this.logger.error(`Failed to update message reaction: ${event.messageId}`, String(err));
-        return null;
-      });
+      // A write that fails, or a row that cannot be read, is the same case: the reaction is kept to be written once
+      // the database answers, and goes out now without the full list.
+      const judge = { kind: 'reaction', chatId: event.chatId } as const;
+      const kept: ChangeSlots = { reactions: new Map([[event.senderId, { value: event.reaction ?? '', judge }]]) };
+      let metadata: Record<string, unknown> | null = null;
+      try {
+        metadata = await this.writeReactions(
+          id,
+          event.messageId,
+          { [event.senderId]: event.reaction ?? '' },
+          judge,
+          verdict,
+        );
+        await this.settled(id, event.messageId, kept);
+      } catch (err) {
+        await this.park(id, event.messageId, kept, err);
+      }
       const reactions = metadata?.reactions as Record<string, string> | undefined;
 
       // `reactions` is the post-apply snapshot of EVERY reaction on the message and consumers REPLACE
@@ -141,12 +334,8 @@ export class MessageMutationProjector {
 
   /** Persist an edit before notifying consumers, while still surfacing the occurrence if storage fails. */
   private async applyMessageEdit(id: string, message: EditedMessage, needsRow: boolean): Promise<void> {
-    const verdict = await this.storedRowVerdict(id, message.messageId, {
-      kind: 'edit',
-      chatId: message.chatId,
-      fromMe: message.fromMe,
-      author: message.author,
-    });
+    const source = { kind: 'edit', chatId: message.chatId, fromMe: message.fromMe, author: message.author } as const;
+    const verdict = await this.storedRowVerdict(id, message.messageId, source);
     if (needsRow && !verdict.exists) return;
     if (verdict.reason) {
       this.logger.warn('Dropping an edit aimed at a message of another chat or sender', {
@@ -157,31 +346,22 @@ export class MessageMutationProjector {
       return;
     }
     let revoked = false;
+    const slot: EditSlot = { body: message.body, judge: source, mark: 'changed', announceText: true };
     try {
-      // Never onto a revoked row: a late edit must not bring back text the sender deleted. An event that repeats the
-      // stored text is no edit, and the marker would label an unedited message. The write compares, not the read
-      // above, as the row may be inserted between the two.
-      const result = await this.messageRepository.update(
-        { sessionId: id, waMessageId: message.messageId, type: Not('revoked'), body: Or(Not(message.body), IsNull()) },
-        { body: message.body },
-      );
-      if (result.affected) {
-        await this.markMessageEdited(id, message.messageId);
-        await this.onTextChanged(id, message.messageId);
-      } else {
-        // Nor announced onto one: the payload carries the new text of a message that was deleted, for everyone or,
-        // through the REST delete, for this account only (which announced nothing). Asked only when the write changed
-        // nothing, so an ordinary edit costs no extra read. A revoke that lands between the write and this read (a
-        // history tombstone or a row stored deleted is written off this chain) makes it read revoked, which is right:
-        // the message is deleted by then.
+      const { changed, target } = await this.writeEdit(id, message.messageId, slot, true, verdict);
+      // Nor announced onto one: the payload carries the new text of a message that was deleted, for everyone or,
+      // through the REST delete, for this account only (which announced nothing). Asked only when the write changed
+      // nothing, so an ordinary edit costs no extra read. A revoke that lands between the write and this read (a
+      // history tombstone or a row stored deleted is written off this chain) makes it read revoked, which is right:
+      // the message is deleted by then.
+      if (!changed && target) {
         revoked =
-          (await this.messageRepository.findOne({
-            where: { sessionId: id, waMessageId: message.messageId, type: 'revoked' },
-            select: { id: true },
-          })) !== null;
+          (await this.messageRepository.findOne({ where: { ...target, type: 'revoked' }, select: { id: true } })) !==
+          null;
       }
+      await this.settled(id, message.messageId, { edit: slot });
     } catch (err) {
-      this.logger.error(`Failed to update edited message: ${message.messageId}`, String(err));
+      await this.park(id, message.messageId, { edit: slot }, err);
     }
     if (revoked) return;
 
@@ -190,9 +370,123 @@ export class MessageMutationProjector {
     void this.webhookService.dispatch(id, 'message.edited', editedPayload);
   }
 
+  /**
+   * Write an edit ({@link EditSlot}) to the row it is judged against ({@link writeTarget}), mark the row, and carry the
+   * text into the copies the message's deliveries still hold (open outbox rows, the event data a failed delivery
+   * keeps), each judged by its payload as a revoke judges them, so a replay, a queued job or a redrive sends the edited
+   * text: after the write changed the stored row, or with no row to write (a message that is not stored, such as an
+   * own send to a chat with disappearing messages while STORE_EPHEMERAL_MESSAGES=false), where only a payload that
+   * names the edit's chat takes it. Never onto a revoked row: a late edit must not bring back text the sender deleted,
+   * and an event that repeats the stored text is no edit (the write compares, not the read, as the row may change
+   * between the two). A row that cannot be read is never written: the copies are rewritten by their payloads and the
+   * read's error is thrown, as is any database failure, for the caller to keep the edit and try again. The slot
+   * records what is done, so a retry does not repeat it. Must run on the message's chain.
+   */
+  async writeEdit(
+    sessionId: string,
+    waMessageId: string,
+    slot: EditSlot,
+    announce: boolean,
+    verdict?: StoredRowVerdict,
+  ): Promise<{ changed: boolean; target?: FindOptionsWhere<Message> }> {
+    verdict ??= slot.own
+      ? ownRowVerdict(slot.own)
+      : slot.judge
+        ? await this.storedRowVerdict(sessionId, waMessageId, slot.judge)
+        : undefined;
+    if (verdict?.reason) return { changed: false };
+    if (verdict?.unread) {
+      if (slot.body !== undefined && slot.judge && !slot.outboxSettled) {
+        await this.changeCopies(sessionId, waMessageId, slot.body, slot.judge);
+        slot.outboxSettled = true;
+      }
+      throw unreadRowError(verdict);
+    }
+    const target =
+      verdict && (slot.judge || slot.own)
+        ? (await this.writeTarget(sessionId, waMessageId, slot.judge!, verdict))!
+        : { sessionId, waMessageId };
+    if (slot.body !== undefined && !slot.textChanged) {
+      const result = await this.messageRepository.update(
+        { ...target, type: Not('revoked'), body: Or(Not(slot.body), IsNull()) },
+        { body: slot.body },
+      );
+      // Kept on the slot: a retry finds the text written and must still mark, copy and announce it.
+      slot.textChanged = Boolean(result?.affected);
+    }
+    const changed = slot.textChanged === true;
+    if (slot.mark === 'always' || (slot.mark === 'changed' && changed)) {
+      await this.markMessageEdited(sessionId, waMessageId, target);
+    }
+    if (slot.body !== undefined && (changed || (verdict && isAbsent(verdict)))) {
+      await this.changeCopies(sessionId, waMessageId, slot.body, slot.judge, verdict);
+      slot.outboxSettled = true;
+    }
+    if (changed && announce && slot.announceText) await this.onTextChanged(sessionId, waMessageId);
+    return { changed, target };
+  }
+
+  /**
+   * Merge reactions ('' withdraws a sender's) into the metadata of the row they are judged against, and return it, or
+   * null when there is none (absent or revoked). A row that cannot be read is never written: the read's error is
+   * thrown, as is a database failure. Must run on the message's chain.
+   */
+  async writeReactions(
+    sessionId: string,
+    waMessageId: string,
+    changes: Record<string, string>,
+    judge: MutationSource,
+    verdict?: StoredRowVerdict,
+  ): Promise<Record<string, unknown> | null> {
+    verdict ??= await this.storedRowVerdict(sessionId, waMessageId, judge);
+    return this.writeJudgedReactions(sessionId, waMessageId, changes, judge, verdict);
+  }
+
+  /** {@link writeReactions} with the verdict in hand. */
+  async writeJudgedReactions(
+    sessionId: string,
+    waMessageId: string,
+    changes: Record<string, string>,
+    judge: MutationSource,
+    verdict: StoredRowVerdict,
+  ): Promise<Record<string, unknown> | null> {
+    if (verdict.reason) return null;
+    if (verdict.unread) throw unreadRowError(verdict);
+    return updateMessageMetadata(
+      this.messageRepository,
+      (await this.writeTarget(sessionId, waMessageId, judge, verdict))!,
+      current => {
+        const reactions = { ...(current.reactions as Record<string, string> | undefined) };
+        for (const [sender, reaction] of Object.entries(changes)) {
+          if (reaction) reactions[sender] = reaction;
+          else delete reactions[sender];
+        }
+        return { ...current, reactions };
+      },
+    );
+  }
+
+  /** Rewrite the delivery copies of an edited message, judged by their payloads; throws when the database fails. */
+  private async changeCopies(
+    sessionId: string,
+    waMessageId: string,
+    body: string,
+    source: MutationSource | undefined,
+    verdict?: StoredRowVerdict,
+  ): Promise<void> {
+    const filed = verdict?.moved && verdict.row ? revokeSourceFor(verdict.row) : undefined;
+    const ours = Boolean(verdict?.exists && !verdict.reason);
+    const predicate = source ? outboxPayloadPredicate(source, this.resolveLid, ours, filed) : undefined;
+    await this.webhookService.changeMessageCopies?.(sessionId, waMessageId, { kind: 'rewrite', body }, predicate);
+  }
+
   /** Keep the marker alongside existing reactions, media and quote metadata. */
-  async markMessageEdited(sessionId: string, waMessageId: string): Promise<void> {
-    const marked = await updateMessageMetadata(this.messageRepository, { sessionId, waMessageId }, metadata => ({
+  async markMessageEdited(
+    sessionId: string,
+    waMessageId: string,
+    target: FindOptionsWhere<Message> = { sessionId, waMessageId },
+  ): Promise<void> {
+    const marked = await updateMessageMetadata(this.messageRepository, target, metadata => ({
       ...metadata,
       edited: true,
     }));
@@ -216,23 +510,24 @@ export class MessageMutationProjector {
     await new Promise<void>(resolve => {
       this.enqueueMessageMutation(sessionId, messageId, async () => {
         try {
-          const reason = source && (await this.foreignRowReason(sessionId, messageId, source));
-          if (reason) {
+          const verdict = source && (await this.storedRowVerdict(sessionId, messageId, source));
+          if (verdict?.reason) {
             this.logger.warn('Not storing an edit aimed at a message of another chat or sender', {
               sessionId,
               messageId,
-              reason,
+              reason: verdict.reason,
             });
             return;
           }
           // Compared in the write, as applyMessageEdit does: the engine's own echo of this edit reaches the row
-          // too, and only the writer that changed the text reports it.
-          const result = await this.messageRepository.update(
-            { sessionId, waMessageId: messageId, type: Not('revoked'), body: Or(Not(body), IsNull()) },
-            { body },
-          );
-          await this.markMessageEdited(sessionId, messageId);
-          if (result?.affected) await this.onTextChanged(sessionId, messageId);
+          // too, and only the writer that changed the text reports it. The row is marked edited either way.
+          const slot: EditSlot = { body, judge: source, mark: 'always', announceText: true };
+          try {
+            await this.writeEdit(sessionId, messageId, slot, true, verdict);
+            await this.settled(sessionId, messageId, { edit: slot });
+          } catch (err) {
+            await this.park(sessionId, messageId, { edit: slot }, err);
+          }
         } catch (err) {
           this.logger.warn(`Failed to update stored body of edited message ${messageId}`, { error: String(err) });
         } finally {

@@ -126,7 +126,7 @@ describe('WebhookRedriveService', () => {
       row.event,
       row.idempotencyKey,
       row.payload,
-      { singleAttempt: true },
+      { singleAttempt: true, fromKeptCopy: true },
     );
     expect(await failures.count()).toBe(0);
     expect(await service.redrive({})).toMatchObject({ delivered: 0, remaining: 0 });

@@ -495,6 +495,87 @@ describe('BaileysMessageStoreService', () => {
     expect(await service.getMessage('s2', 'M2')).not.toBeNull();
   });
 
+  it('clearSession up to a time leaves the rows written after it, for an unlink cleared once the database answers', async () => {
+    await seedSession('s1');
+    jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'], now: 1_786_000_000_000 });
+    try {
+      await service.put('s1', msg('OLD'));
+      const unlinkedAt = new Date();
+      jest.setSystemTime(1_786_000_001_000);
+      await service.put('s1', msg('NEW'));
+
+      await service.clearSession('s1', unlinkedAt);
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(await service.getMessage('s1', 'OLD')).toBeNull();
+    expect(await service.getMessage('s1', 'NEW')).not.toBeNull();
+  });
+
+  it('clearSession up to a time that the database refused hides the rows it would delete, until it runs again', async () => {
+    await seedSession('s1');
+    await service.put('s1', msg('OLD'));
+    const del = jest
+      .spyOn(repo, 'delete')
+      .mockRejectedValueOnce(Object.assign(new Error('Connection terminated'), { code: 'ECONNREFUSED' }));
+    const unlinkedAt = new Date(Date.now() + 1);
+
+    await expect(service.clearSession('s1', unlinkedAt)).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+    expect(await service.getMessage('s1', 'OLD')).toBeNull();
+    expect(await service.getMessages('s1', ['OLD'])).toEqual([]);
+    del.mockRestore();
+
+    await service.clearSession('s1', unlinkedAt);
+    expect(await repo.count({ where: { sessionId: 's1' } })).toBe(0);
+  });
+
+  // A backup reads the table raw: SQLite hands back the UTC text it stores, with no zone in it. Read in the host's zone,
+  // a stamp moves by the zone's offset, which a host in UTC cannot see, so the stamp is also held to the ORM's reading.
+  it('hides a raw row up to the unlink, its stamp read as the ORM reads its own rows', async () => {
+    await seedSession('s1');
+    const unlinkedAt = new Date('2026-11-28T00:00:00.000Z');
+    for (const [id, offset] of [
+      ['OLD', -60_000],
+      ['NEW', 60_000],
+    ] as const) {
+      await repo.insert({
+        sessionId: 's1',
+        waMessageId: id,
+        serializedMessage: '{}',
+        createdAt: new Date(unlinkedAt.getTime() + offset),
+      });
+    }
+    service.hideUpTo('s1', unlinkedAt);
+    const raw = await ds.query<Array<Record<string, unknown>>>(
+      'SELECT * FROM "baileys_stored_messages" ORDER BY "waMessageId"',
+    );
+    const hydrate = jest.spyOn(ds.driver, 'prepareHydratedValue');
+
+    expect(raw.map(row => [row.waMessageId, service.hidesRaw(row)])).toEqual([
+      ['NEW', false],
+      ['OLD', true],
+    ]);
+    expect(hydrate.mock.calls.map(([value, column]) => [value as unknown, column.propertyName])).toEqual(
+      raw.map(row => [row.createdAt, 'createdAt']),
+    );
+  });
+
+  it('clearSession lifts the hiding once it lands, whatever Date it is handed', async () => {
+    await seedSession('s1');
+    service.hideUpTo('s1', new Date(2_000));
+    await service.clearSession('s1', new Date(2_000));
+    // A restore brings an older row of the session back afterwards: it is not hidden any more.
+    await repo.insert({
+      sessionId: 's1',
+      waMessageId: 'RESTORED',
+      serializedMessage: JSON.stringify(msg('RESTORED')),
+      createdAt: new Date(1_000),
+    });
+
+    expect(await service.getMessage('s1', 'RESTORED')).not.toBeNull();
+  });
+
   it('clearSession waits for a write of that session still in flight, so it cannot recreate the row', async () => {
     await seedSession('s1');
     await seedSession('s2');

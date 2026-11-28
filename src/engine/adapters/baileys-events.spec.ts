@@ -1,10 +1,18 @@
+import { Boom } from '@hapi/boom';
 import { createCipheriv, createHash, createHmac } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { compileFunction } from 'node:vm';
 import * as ts from 'typescript';
-import { BaileysEvents, type BaileysEventsHost } from './baileys-events';
+import { BufferJSON } from '@whiskeysockets/baileys';
+import {
+  BaileysEvents,
+  keptInboundRaw,
+  revivedInbound,
+  type BaileysEventsHost,
+  type StoredChange,
+} from './baileys-events';
 import { createLogger } from '../../common/services/logger.service';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { inboundMediaConcurrency } from './inbound-media-cap';
@@ -594,6 +602,144 @@ describe('BaileysEvents inbound media source', () => {
     );
     expect(updateMediaMessage).toHaveBeenCalledTimes(1);
     expect(incoming.media).toEqual({ mimetype: 'image/jpeg', filename: undefined, omitted: true, sizeBytes: 1 });
+  });
+
+  describe('whose address has expired', () => {
+    const OLD = 'https://mmg.whatsapp.net/v/t62/old.enc';
+    const NEW = 'https://mmg.whatsapp.net/v/t62/new.enc';
+    const image = (url: string) => ({
+      imageMessage: { mimetype: 'image/jpeg', fileLength: 3, url, directPath: new URL(url).pathname },
+    });
+    // Baileys' own fetch failure: the host's status lives in `output.statusCode`, not in `status`.
+    const hostAnswered = (statusCode: number) => new Boom(`Failed to fetch stream from ${OLD}`, { statusCode });
+    const reuploadTo = (url: string) =>
+      jest.fn((m: WAMessage) => Promise.resolve({ ...m, message: image(url) } as WAMessage));
+    const receive = (updateMediaMessage: jest.Mock) =>
+      new BaileysEvents(makeHost({ getSocket: () => ({ updateMediaMessage }) as unknown as WASocket })).mapMessage(
+        {
+          key: { id: 'wamid.expired', remoteJid: '15550001111@s.whatsapp.net', fromMe: false },
+          messageTimestamp: 1_700_000_000,
+          message: image(OLD),
+        },
+        'imageMessage',
+      );
+    const fetchedFrom = (call: number): unknown =>
+      (downloadMediaMessage.mock.calls[call] as [WAMessage])[0].message?.imageMessage?.url;
+    const omitted = { mimetype: 'image/jpeg', filename: undefined, omitted: true, sizeBytes: 3 };
+
+    it.each([
+      ['410 Gone', hostAnswered(410)],
+      ['404 Not Found', hostAnswered(404)],
+      ['410 as a numeric status', Object.assign(new Error('gone'), { status: 410 })],
+    ])('asks WhatsApp to upload it again after %s and downloads the new copy', async (_name, error) => {
+      downloadMediaMessage.mockRejectedValueOnce(error).mockResolvedValueOnce(streamOf(Buffer.from('IMG')));
+      const updateMediaMessage = reuploadTo(NEW);
+
+      const incoming = await receive(updateMediaMessage);
+
+      expect(updateMediaMessage).toHaveBeenCalledTimes(1);
+      expect(downloadMediaMessage).toHaveBeenCalledTimes(2);
+      expect(fetchedFrom(1)).toBe(NEW);
+      expect(incoming.media).toEqual({
+        mimetype: 'image/jpeg',
+        filename: undefined,
+        data: Buffer.from('IMG').toString('base64'),
+      });
+    });
+
+    it.each([
+      ['403 Forbidden', hostAnswered(403)],
+      ['503 Service Unavailable', hostAnswered(503)],
+      ['a network failure', new TypeError('fetch failed')],
+    ])('does not ask for an upload after %s', async (_name, error) => {
+      downloadMediaMessage.mockRejectedValueOnce(error);
+      const updateMediaMessage = reuploadTo(NEW);
+
+      const incoming = await receive(updateMediaMessage);
+
+      expect(updateMediaMessage).not.toHaveBeenCalled();
+      expect(downloadMediaMessage).toHaveBeenCalledTimes(1);
+      expect(incoming.media).toEqual(omitted);
+    });
+
+    // rc14 waits for the phone's answer with no timeout, keeping two listeners on the socket until it comes.
+    it('stops asking while five requests are unanswered, and asks again once one is answered', async () => {
+      const saved = process.env.MEDIA_DOWNLOAD_TIMEOUT_MS;
+      process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '50';
+      try {
+        const answers: Array<(m: WAMessage) => void> = [];
+        const updateMediaMessage = jest.fn(() => new Promise<WAMessage>(resolve => answers.push(resolve)));
+        const sock = { updateMediaMessage } as unknown as WASocket;
+        const events = new BaileysEvents(makeHost({ getSocket: () => sock }));
+        const receiveOne = (n: number) =>
+          events.mapMessage(
+            {
+              key: { id: `wamid.expired-${n}`, remoteJid: '15550001111@s.whatsapp.net', fromMe: false },
+              messageTimestamp: 1_700_000_000 + n,
+              message: image(OLD),
+            },
+            'imageMessage',
+          );
+        downloadMediaMessage.mockRejectedValue(hostAnswered(410));
+
+        for (let n = 1; n <= 6; n++) await expect(receiveOne(n)).resolves.toMatchObject({ media: omitted });
+        expect(updateMediaMessage).toHaveBeenCalledTimes(5);
+
+        answers[0]({ key: { id: 'wamid.expired-1' }, message: image(NEW) });
+        await new Promise(resolve => setImmediate(resolve));
+        await receiveOne(7);
+        expect(updateMediaMessage).toHaveBeenCalledTimes(6);
+      } finally {
+        downloadMediaMessage.mockReset();
+        if (saved === undefined) delete process.env.MEDIA_DOWNLOAD_TIMEOUT_MS;
+        else process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = saved;
+      }
+    });
+
+    it('gives up when the new copy cannot be fetched either', async () => {
+      downloadMediaMessage.mockRejectedValueOnce(hostAnswered(410)).mockRejectedValueOnce(hostAnswered(410));
+      const updateMediaMessage = reuploadTo(NEW);
+
+      const incoming = await receive(updateMediaMessage);
+
+      expect(updateMediaMessage).toHaveBeenCalledTimes(1);
+      expect(downloadMediaMessage).toHaveBeenCalledTimes(2);
+      expect(incoming.media).toEqual(omitted);
+    });
+
+    it('does not fetch a new copy whose address is outside WhatsApp hosts', async () => {
+      downloadMediaMessage.mockRejectedValueOnce(hostAnswered(410));
+      const updateMediaMessage = reuploadTo('https://internal.example/v/t62/x.enc');
+
+      const incoming = await receive(updateMediaMessage);
+
+      expect(updateMediaMessage).toHaveBeenCalledTimes(1);
+      expect(downloadMediaMessage).toHaveBeenCalledTimes(1);
+      expect(incoming.media).toEqual(omitted);
+    });
+
+    // A Baileys release that reads the Boom status itself asks once, retries once, and rethrows the
+    // retry's failure: that must not start a second upload request.
+    it('asks only once when Baileys already asked for the upload', async () => {
+      downloadMediaMessage.mockImplementationOnce(
+        async (
+          m: WAMessage,
+          _t: string,
+          _o: unknown,
+          ctx: { reuploadRequest: (m: WAMessage) => Promise<WAMessage> },
+        ) => {
+          await ctx.reuploadRequest(m);
+          throw hostAnswered(410);
+        },
+      );
+      const updateMediaMessage = reuploadTo(NEW);
+
+      const incoming = await receive(updateMediaMessage);
+
+      expect(updateMediaMessage).toHaveBeenCalledTimes(1);
+      expect(downloadMediaMessage).toHaveBeenCalledTimes(1);
+      expect(incoming.media).toEqual(omitted);
+    });
   });
 });
 
@@ -1627,6 +1773,86 @@ describe('BaileysEvents own status addressed by LID', () => {
     expect(onMessage).not.toHaveBeenCalled();
     expect(onMessageCreate).toHaveBeenCalledWith(expect.objectContaining({ id: 'ST-ALT-SELF', fromMe: true }));
     expect(stored.get('ST-ALT-SELF')?.key.fromMe).toBe(true);
+  });
+});
+
+describe('BaileysEvents removal of a conflicting copy the store refused', () => {
+  it("is kept, and removes the copy once the store answers if it still carries that delivery's key", async () => {
+    const peer = '6282222222222@s.whatsapp.net';
+    const kept: Array<{ messageId: string; change: StoredChange }> = [];
+    const removed: string[] = [];
+    let failing = true;
+    const copy = { key: { id: 'C1', remoteJid: peer, fromMe: false }, message: { conversation: 'hi' } } as WAMessage;
+    const events = new BaileysEvents(
+      makeHost({
+        getOnMessage: () => () => ({ settled: Promise.resolve({ conflict: true }) }),
+        removeStoredMessage: (id: string, shouldRemove: (stored: WAMessage) => boolean) => {
+          if (failing) {
+            return Promise.reject(Object.assign(new Error('Connection terminated'), { code: 'ECONNREFUSED' }));
+          }
+          if (shouldRemove(copy)) removed.push(id);
+          return Promise.resolve();
+        },
+        keepStoredChange: (messageId: string, _changeId: string, change: StoredChange) =>
+          kept.push({ messageId, change }),
+      }),
+    );
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [{ key: copy.key, messageTimestamp: 1_700_000_000, message: { conversation: 'hi' } }],
+    });
+    const deadline = Date.now() + 5_000;
+    while (kept.length === 0 && Date.now() < deadline) await new Promise(resolve => setImmediate(resolve));
+    expect(kept).toEqual([{ messageId: 'C1', change: expect.objectContaining({ kind: 'remove' }) as unknown }]);
+
+    failing = false;
+    await events.restoreStoredChange('C1', JSON.parse(JSON.stringify(kept[0].change)) as StoredChange);
+
+    expect(removed).toEqual(['C1']);
+
+    // The real message of the id stored meanwhile, from another sender: a kept removal leaves its copy alone.
+    removed.length = 0;
+    copy.key = { id: 'C1', remoteJid: '6282222222222@s.whatsapp.net', fromMe: true };
+    await events.restoreStoredChange('C1', kept[0].change);
+
+    expect(removed).toEqual([]);
+  });
+});
+
+describe('BaileysEvents removal of a conflicting copy refused for a reason of its own', () => {
+  it('keeps nothing', async () => {
+    const kept: string[] = [];
+    let tried = false;
+    const events = new BaileysEvents(
+      makeHost({
+        getOnMessage: () => () => ({ settled: Promise.resolve({ conflict: true }) }),
+        removeStoredMessage: () => {
+          tried = true;
+          return Promise.reject(
+            Object.assign(new Error('CHECK constraint failed'), { code: 'SQLITE_CONSTRAINT_CHECK' }),
+          );
+        },
+        keepStoredChange: (messageId: string) => kept.push(messageId),
+      }),
+    );
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [
+        {
+          key: { id: 'C2', remoteJid: '6282222222222@s.whatsapp.net', fromMe: false },
+          messageTimestamp: 1_700_000_000,
+          message: { conversation: 'hi' },
+        },
+      ],
+    });
+    const deadline = Date.now() + 5_000;
+    while (!tried && Date.now() < deadline) await new Promise(resolve => setImmediate(resolve));
+    for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));
+
+    expect(tried).toBe(true);
+    expect(kept).toEqual([]);
   });
 });
 
@@ -3076,6 +3302,56 @@ describe('BaileysEvents poll votes', () => {
     });
     expect(onMessage).not.toHaveBeenCalled();
     expect(onMessageCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps a vote whose poll the store fails to read, and reads it once handed back', async () => {
+    const poll = makePoll(['Pizza', 'Sushi', 'Tacos']);
+    let failing = true;
+    const kept: WAMessage[] = [];
+    const { events, onPollVote } = setup({
+      getStoredMessage: (id: string) =>
+        failing
+          ? Promise.reject(Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }))
+          : Promise.resolve(id === poll.key.id ? poll : null),
+      keepUnreadInbound: (msg: WAMessage) => kept.push(msg),
+    });
+    const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, ['Sushi'], {
+      key: { participant: voterPhone },
+      senderTimestampMs: 1_786_000_000_123,
+    });
+    // As the library delivers it: its content in the protocol's own classes.
+    vote.message = proto.Message.fromObject(vote.message!);
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+    await flush();
+    expect(kept).toEqual([vote]);
+    expect(onPollVote).not.toHaveBeenCalled();
+
+    failing = false;
+    // Handed back as the session keeps it: through JSON, which holds its 64-bit time as a string, and revived.
+    const form = { BufferJSON, proto } as unknown as typeof lib;
+    await events.redeliverInbound(revivedInbound(form, keptInboundRaw(form, kept[0])));
+
+    expect(onPollVote).toHaveBeenCalledWith(
+      expect.objectContaining({ pollMessageId: 'POLL1', selectedOptions: ['Sushi'], timestampMs: 1_786_000_000_123 }),
+    );
+  });
+
+  it('keeps a vote whose poll the store does not hold yet, its copy kept to be written', async () => {
+    const kept: WAMessage[] = [];
+    const { events, onPollVote } = setup(
+      { keepUnreadInbound: (msg: WAMessage) => kept.push(msg), isStoredCopyKept: (id: string) => id === 'POLL1' },
+      null,
+    );
+    const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, ['Sushi'], {
+      key: { participant: voterPhone },
+    });
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+    await flush();
+
+    expect(kept).toEqual([vote]);
+    expect(onPollVote).not.toHaveBeenCalled();
   });
 
   it('emits poll.vote with multiple selected options', async () => {

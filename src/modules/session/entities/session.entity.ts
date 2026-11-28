@@ -15,6 +15,20 @@ export enum SessionStatus {
   FAILED = 'failed',
 }
 
+/**
+ * Statuses that assert an engine is running somewhere. The boot reset clears them for every row this
+ * node may claim; markLapsedDisconnected clears them for a row whose holder never came back, a
+ * QR_READY row only while it has no phone. FAILED and CREATED stay out of both: an operator has to
+ * see them.
+ */
+export const ACTIVE_STATUSES = [
+  SessionStatus.READY,
+  SessionStatus.INITIALIZING,
+  SessionStatus.QR_READY,
+  SessionStatus.AUTHENTICATING,
+  SessionStatus.ACTION_REQUIRED,
+];
+
 @Entity('sessions')
 export class Session {
   @PrimaryGeneratedColumn('uuid')

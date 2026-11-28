@@ -130,3 +130,30 @@ export async function recordTerminalFailure(
     lastError: errMessage,
   });
 }
+
+/**
+ * A digest of a delivery's pre-hook event data, as JSON serializes it. The outbox payload column stores that same
+ * serialization, so the data read back from a row hashes alike unless something rewrote it. Undefined for data that
+ * does not serialize, which no outbox row can hold either.
+ */
+export function dataHash(data: Record<string, unknown>): string | undefined {
+  try {
+    return crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * What a message delivery takes from its outbox row as read now (see WebhookOutboxService.currentMessagePayload):
+ * null once the row was closed, the row's data when it no longer hashes as `expected` (a change rewrote it), and
+ * undefined otherwise, when the delivery keeps what it holds. Without `expected` (the delivery does not know what the
+ * row held) only a closed row is taken.
+ */
+export function changedData(
+  held: Record<string, unknown> | null | undefined,
+  expected: string | null | undefined,
+): Record<string, unknown> | null | undefined {
+  if (!held) return held;
+  return expected && dataHash(held) !== expected ? held : undefined;
+}

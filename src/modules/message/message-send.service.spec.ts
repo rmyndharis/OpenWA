@@ -4,7 +4,13 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, FindOperator, In, Repository } from 'typeorm';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import type { LidMapping } from '../../engine/identity/lid-mapping.entity';
-import { BadRequestException, ExecutionContext, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ExecutionContext,
+  NotFoundException,
+  PayloadTooLargeException,
+} from '@nestjs/common';
 import { from, lastValueFrom } from 'rxjs';
 import { MessageSendService } from './message-send.service';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
@@ -24,6 +30,8 @@ import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error'
 import { SendIdempotencyKey } from './entities/send-idempotency-key.entity';
 import { SendIdempotencyService } from './idempotency/send-idempotency.service';
 import { SendIdempotencyInterceptor, sendFailureProvesNothingSent } from './idempotency/send-idempotency.interceptor';
+import { runClaimedSend } from './idempotency/run-idempotent-send';
+import { provesNothingSent } from '../../common/errors/engine-not-sent.error';
 import { BaileysMessaging, type BaileysMessagingHost } from '../../engine/adapters/baileys-messaging';
 import { WhatsAppWebJsAdapter } from '../../engine/adapters/whatsapp-web-js.adapter';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
@@ -790,15 +798,22 @@ describe('MessageSendService', () => {
       (repository.update as jest.Mock).mockRejectedValueOnce(
         Object.assign(new Error('UNIQUE constraint failed'), { code: 'SQLITE_CONSTRAINT_UNIQUE' }),
       );
-      (repository.findOne as jest.Mock).mockResolvedValueOnce(echoRow);
+      (repository.findOne as jest.Mock).mockResolvedValueOnce(echoRow).mockResolvedValueOnce(echoRow);
 
       await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'hi' });
 
-      // Timestamp merged onto the echo row; the redundant PENDING row dropped. `status` is NOT
-      // written: the echo row is already SENT and an ack may have advanced it further.
-      const [, mergePatch] = (repository.update as jest.Mock).mock.calls[1] as [unknown, object];
-      expect(mergePatch).not.toHaveProperty('status');
-      expect(repository.delete).toHaveBeenCalledWith({ id: 'msg-uuid-1' });
+      // The send's row is kept as the echo row's twin first, then the timestamp goes onto the echo row and the twin is
+      // dropped. `status` is NOT written there: the echo row is already SENT and an ack may have advanced it further.
+      const update = repository.update as jest.Mock<unknown, [Record<string, unknown>, object]>;
+      expect(update.mock.calls[1]).toEqual([
+        { id: 'msg-uuid-1', status: MessageStatus.PENDING },
+        expect.objectContaining({ status: MessageStatus.SENT, echoOf: 'wa-msg-1' }),
+      ]);
+      expect(update.mock.calls[2]).toEqual([
+        { sessionId: 'sess-1', waMessageId: 'wa-msg-1' },
+        { timestamp: 1706868000 },
+      ]);
+      expect(repository.delete).toHaveBeenCalledWith({ id: 'msg-uuid-1', echoOf: 'wa-msg-1' });
       const persisted = (hookManager.execute as jest.Mock).mock.calls.filter(
         ([ev]: unknown[]) => ev === 'message:persisted',
       ) as unknown[][];
@@ -1990,7 +2005,8 @@ describe('MessageSendService', () => {
         const complete = jest.fn().mockResolvedValue(undefined);
         const release = jest.fn().mockResolvedValue(undefined);
         const markFailed = jest.fn().mockResolvedValue(undefined);
-        const store = { claim, complete, release, markFailed } as unknown as SendIdempotencyService;
+        const handOver = jest.fn().mockResolvedValue(undefined);
+        const store = { claim, complete, release, markFailed, handOver } as unknown as SendIdempotencyService;
         const interceptor = new SendIdempotencyInterceptor(store);
 
         mockEngine.clickButton.mockImplementationOnce(() => tc.runEngine());
@@ -2023,6 +2039,8 @@ describe('MessageSendService', () => {
         expect(sendFailureProvesNothingSent(caught)).toBe(true);
         expect(release).toHaveBeenCalledWith(`claim-${tc.label}`);
         expect(markFailed).not.toHaveBeenCalled();
+        // The claim was handed over before the engine refused: the proof comes from the engine, not the hand-over.
+        expect(handOver).toHaveBeenCalledWith(`claim-${tc.label}`);
       }
     });
   });
@@ -2417,12 +2435,12 @@ describe('MessageSendService', () => {
   });
 
   describe('persistSentState vs the own-send echo (dedup race)', () => {
-    it('retains the sent media row when merging onto the echo fails', async () => {
-      (repository.update as jest.Mock).mockRejectedValueOnce(
-        new Error('UNIQUE constraint failed: messages.sessionId, messages.waMessageId'),
-      );
+    it("keeps the sent media row as the echo row's twin when merging onto the echo fails", async () => {
+      (repository.update as jest.Mock)
+        .mockRejectedValueOnce(new Error('UNIQUE constraint failed: messages.sessionId, messages.waMessageId'))
+        .mockResolvedValueOnce({ affected: 1 }) // the row kept as the twin
+        .mockRejectedValueOnce(new Error('SQLITE_BUSY')); // the metadata merge onto the echo row
       (repository.findOne as jest.Mock).mockResolvedValue({ id: 'echo-row', metadata: {} });
-      (repository.update as jest.Mock).mockRejectedValueOnce(new Error('SQLITE_BUSY'));
 
       const result = await service.sendImage('sess-1', { chatId: '621@c.us', base64: 'QUJD', mimetype: 'image/png' });
 
@@ -2431,16 +2449,17 @@ describe('MessageSendService', () => {
       expect(repository.delete).not.toHaveBeenCalled();
       expect(repository.update).toHaveBeenCalledWith(
         { id: 'msg-uuid-1', status: MessageStatus.PENDING },
-        { status: MessageStatus.SENT, timestamp: 1706868000 },
+        { status: MessageStatus.SENT, timestamp: 1706868000, echoOf: 'wa-msg-1' },
       );
     });
 
     // The pending reaper failed the row while the upload ran, which dropped its payload: the retained row is the one
     // that is FAILED, and it has to get the payload back from the copy this send still holds.
-    it('retains a row the pending reaper failed first, payload included, when merging onto the echo fails', async () => {
+    it('keeps a row the pending reaper failed first as the twin, payload included, when merging onto the echo fails', async () => {
       (repository.update as jest.Mock)
         .mockResolvedValueOnce({ affected: 0 }) // the SENT write guarded on PENDING: the row is FAILED now
         .mockRejectedValueOnce(new Error('UNIQUE constraint failed: messages.sessionId, messages.waMessageId')) // the rewrite meets the echo's id
+        .mockResolvedValueOnce({ affected: 1 }) // the FAILED row kept as the twin
         .mockRejectedValueOnce(new Error('SQLITE_BUSY')); // the metadata merge onto the echo row
       (repository.findOne as jest.Mock).mockResolvedValue({ id: 'echo-row', metadata: {} });
 
@@ -2449,21 +2468,21 @@ describe('MessageSendService', () => {
       expect(result.messageId).toBe('wa-msg-1');
       expect(repository.delete).not.toHaveBeenCalled();
       const update = repository.update as jest.Mock<unknown, [unknown, Record<string, unknown>]>;
-      const [where, patch] = update.mock.calls.at(-1) ?? [];
+      const [where, patch] = update.mock.calls[2] ?? [];
       expect(where).toEqual({ id: 'msg-uuid-1', status: MessageStatus.FAILED });
-      expect(patch).toMatchObject({ status: MessageStatus.SENT, timestamp: 1706868000 });
+      expect(patch).toMatchObject({ status: MessageStatus.SENT, timestamp: 1706868000, echoOf: 'wa-msg-1' });
       expect(patch).toMatchObject({ metadata: { media: { data: 'QUJD' } } });
       expect(patch).not.toHaveProperty('waMessageId');
     });
 
-    // The reaper can also fail the row after this send's first write found it PENDING and met the echo's id, while the
-    // merge onto the echo row is being tried. The write guarded on PENDING then matches nothing and the row is recovered
-    // the same way.
-    it('retains a row the pending reaper failed while the merge onto the echo was tried, payload included', async () => {
+    // The reaper can also fail the row after this send's first write found it PENDING and met the echo's id, before it
+    // is kept as the twin. The write guarded on PENDING then matches nothing and the row is recovered the same way.
+    it('keeps a row the pending reaper failed after the SENT write met the echo id as the twin, payload included', async () => {
       (repository.update as jest.Mock)
         .mockRejectedValueOnce(new Error('UNIQUE constraint failed: messages.sessionId, messages.waMessageId'))
-        .mockRejectedValueOnce(new Error('SQLITE_BUSY')) // the metadata merge onto the echo row
-        .mockResolvedValueOnce({ affected: 0 }); // the write guarded on PENDING: the row is FAILED by now
+        .mockResolvedValueOnce({ affected: 0 }) // the twin write guarded on PENDING: the row is FAILED by now
+        .mockResolvedValueOnce({ affected: 1 }) // the FAILED row kept as the twin
+        .mockRejectedValueOnce(new Error('SQLITE_BUSY')); // the metadata merge onto the echo row
       (repository.findOne as jest.Mock).mockResolvedValue({ id: 'echo-row', metadata: {} });
 
       const result = await service.sendImage('sess-1', { chatId: '621@c.us', base64: 'QUJD', mimetype: 'image/png' });
@@ -2471,12 +2490,12 @@ describe('MessageSendService', () => {
       expect(result.messageId).toBe('wa-msg-1');
       expect(repository.delete).not.toHaveBeenCalled();
       const update = repository.update as jest.Mock<unknown, [unknown, Record<string, unknown>]>;
-      const [pendingWhere, pendingPatch] = update.mock.calls.at(-2) ?? [];
+      const [pendingWhere, pendingPatch] = update.mock.calls[1] ?? [];
       expect(pendingWhere).toEqual({ id: 'msg-uuid-1', status: MessageStatus.PENDING });
-      expect(pendingPatch).toEqual({ status: MessageStatus.SENT, timestamp: 1706868000 });
-      const [where, patch] = update.mock.calls.at(-1) ?? [];
+      expect(pendingPatch).toEqual({ status: MessageStatus.SENT, timestamp: 1706868000, echoOf: 'wa-msg-1' });
+      const [where, patch] = update.mock.calls[2] ?? [];
       expect(where).toEqual({ id: 'msg-uuid-1', status: MessageStatus.FAILED });
-      expect(patch).toMatchObject({ status: MessageStatus.SENT, timestamp: 1706868000 });
+      expect(patch).toMatchObject({ status: MessageStatus.SENT, timestamp: 1706868000, echoOf: 'wa-msg-1' });
       expect(patch).toMatchObject({ metadata: { media: { data: 'QUJD' } } });
       expect(patch).not.toHaveProperty('waMessageId');
     });
@@ -2489,6 +2508,7 @@ describe('MessageSendService', () => {
       (repository.update as jest.Mock).mockRejectedValueOnce(
         new Error('UNIQUE constraint failed: messages.sessionId, messages.waMessageId'),
       );
+      (repository.findOne as jest.Mock).mockResolvedValue({ id: 'echo-row', metadata: {} });
 
       const result = await service.sendText('sess-1', { chatId: '621@c.us', text: 'hi' });
 
@@ -2505,9 +2525,9 @@ describe('MessageSendService', () => {
        * when a `delivered` ack won the race, writing SENT here dragged the row back and the
        * dashboard showed one tick for a message the recipient already had.
        */
-      const [, sentPatch] = (repository.update as jest.Mock).mock.calls[1] as [unknown, object];
+      const [, sentPatch] = (repository.update as jest.Mock).mock.calls[2] as [unknown, object];
       expect(sentPatch).not.toHaveProperty('status');
-      expect(repository.delete).toHaveBeenCalledWith({ id: 'msg-uuid-1' });
+      expect(repository.delete).toHaveBeenCalledWith({ id: 'msg-uuid-1', echoOf: 'wa-msg-1' });
     });
 
     it('merges the media payload onto the echo row for a media send (no data loss after reload)', async () => {
@@ -2519,9 +2539,9 @@ describe('MessageSendService', () => {
       await service.sendImage('sess-1', { chatId: '621@c.us', base64: 'QUJD', mimetype: 'image/png' });
 
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-      const patch = (repository.update as jest.Mock).mock.calls[1]?.[1] as Record<string, unknown> | undefined;
+      const patch = (repository.update as jest.Mock).mock.calls[2]?.[1] as Record<string, unknown> | undefined;
       expect((patch?.metadata as { media?: { data?: string } } | undefined)?.media?.data).toBe('QUJD');
-      expect(repository.delete).toHaveBeenCalledWith({ id: 'msg-uuid-1' });
+      expect(repository.delete).toHaveBeenCalledWith({ id: 'msg-uuid-1', echoOf: 'wa-msg-1' });
     });
 
     it('keeps the echo row’s downloaded bytes rather than merging a URL pointer over them', async () => {
@@ -2531,9 +2551,9 @@ describe('MessageSendService', () => {
 
       await service.sendImage('sess-1', { chatId: '621@c.us', url: 'https://example.com/cat.png' });
 
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-      const patch = (repository.update as jest.Mock).mock.calls[1]?.[1] as Record<string, unknown> | undefined;
-      expect(patch).not.toHaveProperty('metadata');
+      const patches = (repository.update as jest.Mock).mock.calls.map(([, patch]: unknown[]) => patch);
+      expect(patches.length).toBeGreaterThan(2);
+      for (const patch of patches) expect(patch).not.toHaveProperty('metadata');
     });
 
     it('does NOT delete anything on a transient (non-unique) persist error', async () => {
@@ -2777,6 +2797,57 @@ describe('MessageSendService', () => {
         expect(archive.archive).toHaveBeenCalledWith(expect.objectContaining({ waMessageId: `wa-${status}`, status }));
       },
     );
+  });
+
+  describe('a keyed send whose claim refused the hand-over', () => {
+    const claimRefusing = (refusal: Error) =>
+      ({
+        handOver: jest.fn().mockRejectedValue(refusal),
+        release: jest.fn().mockResolvedValue(undefined),
+        markFailed: jest.fn().mockResolvedValue(undefined),
+        complete: jest.fn().mockResolvedValue(undefined),
+      }) as unknown as SendIdempotencyService;
+
+    // The claim can be taken over while pacing holds the send: the hand-over refuses it before the engine.
+    it('fails its row at once, and tells no plugin of a send failure it never had', async () => {
+      const refusal = new ConflictException('taken over');
+
+      await expect(
+        runClaimedSend(claimRefusing(refusal), 'row-1', () =>
+          service.sendText('sess-1', { chatId: 'test@c.us', text: 'hi' }),
+        ),
+      ).rejects.toBe(refusal);
+
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+      expect(repository.update).toHaveBeenCalledWith(
+        { id: 'msg-uuid-1', sessionId: 'sess-1' },
+        expect.objectContaining({ status: MessageStatus.FAILED }),
+      );
+      expect(hookManager.execute).not.toHaveBeenCalledWith('message:failed', expect.anything(), expect.anything());
+    });
+
+    it('leaves its row to the pending reaper when the database refuses that write as well', async () => {
+      const refusal = new Error('Connection terminated unexpectedly');
+      (repository.update as jest.Mock).mockRejectedValue(new Error('Connection terminated unexpectedly'));
+
+      await expect(
+        runClaimedSend(claimRefusing(refusal), 'row-1', () =>
+          service.sendText('sess-1', { chatId: 'test@c.us', text: 'hi' }),
+        ),
+      ).rejects.toBe(refusal);
+
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  it('marks a template lookup the database refused as raised before anything was sent', async () => {
+    const refused = new Error('Connection terminated unexpectedly');
+    (templateService.resolve as jest.Mock).mockRejectedValue(refused);
+
+    await expect(service.sendTemplate('sess-1', { chatId: 'test@c.us', templateName: 'greet' })).rejects.toBe(refused);
+
+    expect(provesNothingSent(refused)).toBe(true);
+    expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
   });
 });
 

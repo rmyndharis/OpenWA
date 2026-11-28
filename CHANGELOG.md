@@ -7,12 +7,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes (behavior changes)
+
+- `GET /api/infra/export-data` runs one export at a time (a second answers `409` `EXPORT_IN_PROGRESS`) and ends a download that has not finished after 60 minutes.
+- On SQLite with `SQLITE_JOURNAL_MODE=DELETE`, `GET /api/infra/export-data` reads from a copy of the database written beside it and needs as much free space as the database plus a tenth of it, at least 256 MiB (`507` `EXPORT_NO_ROOM_FOR_SNAPSHOT` otherwise); a stop while the copy is written removes it and answers `503` `EXPORT_STOPPED`.
+- `POST /api/infra/import-data` refuses a backup above `25mb` that is larger than the free heap divided by 2.5 (about 411 MB on a 1 GiB heap), or by 4 when it holds any character outside Latin-1, such as an emoji (about 259 MB), with `413` `IMPORT_TOO_LARGE`; use `scripts/backup.sh` and `scripts/restore.sh` for a larger database.
+- A message a `message:received` or `message:sent` handler filed under another chat before the upgrade no longer takes a revoke, edit or reaction held for a repeated or failed delivery of it, or by an engine retiring as it commits; such a row keeps no record of the chat the engine reported, except a whatsapp-web.js message whose id and `from` or `to` still name it.
+- Webhooks: a delivery not yet sent when its message is revoked is withdrawn, with no POST and no delivery-failure row, and one whose message is deleted through the API carries the placeholder (`type: "revoked"`, empty `body`).
+- Webhooks: during a database outage long enough to drop kept copies past their bound, a `message.received`, `message.sent` or `message.edited` delivery whose copy was dropped is recorded as a delivery failure instead of being sent; the row keeps its data for a redrive only while `WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS` is set and no revoke, delete or edit of the message came after the drop.
+- A stop (SIGTERM, a restart, a rollout) during a SQLite restore through `POST /api/infra/import-data` rolls the restore back within 500 rows and answers `503` `IMPORT_STOPPED`, instead of waiting for it to commit; the data stays as it was, so restore again once the gateway is back.
+- A send to a number WhatsApp holds under other digits (a Brazilian, Mexican or Argentine mobile written in its other spelling) is stored under the number WhatsApp resolved, no longer under the `chatId` of the request, also when it went out to the contact's `@lid`. Read its history and follow up with the id `GET /api/sessions/{sessionId}/contacts/check/{number}` returns, and name that id in `allowedChats`: a key scoped to the other spelling no longer reads the rows of its own sends. Rows stored before the upgrade keep their chat id.
+- On whatsapp-web.js, a send whose number lookup answers the contact's `@lid` is stored under that `@lid`, not under the `chatId` of the request, whatever digits it names; the phone number's chat, and a key scoped to it, list it through the pair the send reports, which is not reported over another number already reported for that `@lid`.
+- On Baileys, an API send that went out to a contact's `@lid` is stored under the phone id it was addressed to in both orders of the gateway's writes, so the `@lid` chat lists it only once WhatsApp reports the pair; a key scoped to that phone id sees the `@lid` as the reactor id of a reaction to its own send.
+
 ### Added
 
+- SDKs: `npm run check:sdk-coverage` compares the query keys each SDK call sends with the parameters the contract declares, so a renamed or dropped query parameter fails CI instead of leaving a client on the old key.
+- Audit: `browser_session_created` and `browser_session_ended` rows record which key opened or ended a dashboard browser session, with the client IP and user agent.
+- Recovery: what the database refused is kept in a journal (`RECOVERY_JOURNAL_PATH`, default `./data/recovery-journal.jsonl`), so a restart or a crash while it is away no longer loses it.
+- Scripts: `restore.sh` moves the recovery journal aside when it replaces or stages the data store, so the restored app does not replay it.
 - API keys: an optional `deniedPermissions` blocklist refuses chosen capabilities, such as sending or reading messages, across REST, the `/events` stream and webhooks; MCP and the queue dashboard refuse a key that has one. Thanks @ziyadfazyan.
+
+### Changed
+
+- The release workflow refuses a tag whose commit `main` does not hold, so unmerged code cannot publish `latest`.
+- The release workflow fails before promotion when the exact `X.Y.Z` image tag already serves another digest, so a second full run of a published version cannot re-point it.
+- Engines: `deleteMessage` resolves `{ id?, engineChatId? }` and `editMessage` results carry `engineChatId`, the chat the engine found the message in; an engine plugin that resolves the id alone keeps working.
+- Engines: send results carry `engineChatId` when the message went to another chat than the one named, and `replyToMessage` takes an optional `{ quotedChatId }`, the chat its quoted message is checked in.
+- `GET /api/health/ready` keeps answering `200` while a SQLite restore runs, since its database check reads no table.
 
 ### Fixed
 
+- whatsapp-web.js: `GET /api/sessions/{sessionId}/messages/{chatId}/history` answers `503` when the page dies mid-read, where it returned the messages read so far as a complete list.
+- Infrastructure: keep a storage or session data path already in effect outside `./data` (such as the `./uploads` v0.2.0 to v0.7.3 saved) instead of answering `400` to every configuration save; only a changed path must be inside `./data`.
+- Baileys: inbound media whose download address has expired (404 or 410 from the media host) is requested again from the sender and downloaded, instead of always arriving as the omitted marker.
+- Dashboard: say so on the login form when the browser does not keep the session cookie (API on another site, blocked cookies), instead of returning to the form with no message.
+- Plugins: reject a `ctx` call still in flight when its webhook dispatch times out instead of leaving it unanswered, which held every later capability call of the plugin after 64 such timeouts.
+- Webhooks: the settled outbox prune runs again a minute after a pass that hit its 100,000-row cap, so an installation settling more rows a day no longer grows `webhook_outbox_events` without bound.
+- Database: on SQLite, a failed audit log, API key, dashboard session or ingress dead-letter insert no longer rolls back writes other requests made on the shared connection while it was open.
+- Docs: correct the SQLite WAL default, dashboard cookie sign-in (a separately hosted dashboard must share the API's site), plugin secret export, CORS headers, webhook job retention, dashboard coverage floors, session row fences, ingress order on a busy key, data a session delete keeps, routes without `Idempotency-Key` and the whatsapp-web.js star caveat, and list the WAL, `DOCKER_HOST`, index, sidecar limit and Helm `/tmp` changes in the 0.32.0 upgrade hazards.
+- Database: when SQLite cannot switch a database to WAL, log a boot warning naming the mode in effect and keep `synchronous = FULL` instead of the WAL-only `NORMAL`.
+- Scripts: the `backup.sh` hint for an unwritable `BACKUP_DIR` asks Helm installs for `TMPDIR=/app/data/backups` too, since the chart caps `/tmp`.
+- Audit: `GET /api/sessions/{sessionId}/qr` writes one `session_qr_generated` row per QR code and reader (API key and client address) instead of one per read, so a polling pairing dialog no longer fills the audit log.
+- Auth: a failed revoke of a key's dashboard browser sessions, on key revoke or delete, is now logged as a warning naming the key instead of being silently dropped.
+- Auth: the first dashboard sign-in forwarded as `https` by a proxy not in `TRUSTED_PROXIES` logs a warning that its session cookie was issued without `Secure`, naming `TRUSTED_PROXIES` and `DASHBOARD_SESSION_COOKIE_SECURE`.
+- Docker: the bundled Redis runs with `--maxmemory 256mb` under its 512 MB limit, so a full queue refuses new jobs (delivered directly) instead of being OOM-killed on every restart.
+- WebSocket: while Redis refuses writes, chat-restricted subscribers on another replica keep receiving chat events.
+- Queue: finished jobs past their declared retention age are removed every five minutes, so a Redis at its memory ceiling takes jobs again without manual cleanup.
+- Baileys: confirm a contact's LID with WhatsApp after an API send to its phone number, so the sent message shows in the chat listed under that `@lid` without waiting for the contact to reply. Thanks @juanbracamonte for the report.
+- Messages: store a send to a number WhatsApp holds under other digits (a Brazilian ninth digit) under the number WhatsApp resolved, not under the `chatId` of the request, so it shows in the same chat as the contact's replies.
+- whatsapp-web.js: store a send whose number lookup answers the contact's LID under that LID, where the contact's replies arrive; a row under the digits written fell out of every thread of the contact once WhatsApp's own number for the LID was reported.
+- Messages: store an API send that went out to the contact's LID under the chat it was addressed to whichever write lands first, and let reactions, edits and revokes naming the LID reach it; an API delete for everyone naming the LID left the text stored.
+- Messages: react, edit, delete, star, pin, unpin and forward through the API naming the phone id of a Baileys send that went out to a LID act on it, which answered `404`.
+- whatsapp-web.js: a send to another spelling of a number keeps the phone another source reported for the contact's LID, which a key scoped to that number lost the LID's chat to.
+- Messages: keep an API send's media, quote or poll when merging it onto the row its own-send echo stored first fails, and let the pending reaper's sweep finish the merge; the message stayed in its thread twice.
+- Messages: announce `message:deleted` for the row an API send merges onto its echo row only once that row is gone, where a failed delete left it to be marked `failed`.
+- Messages: write the SENT state of a send WhatsApp accepted once the database answers, kept in the recovery journal meanwhile, with the receipts and changes that reach it first; the pending reaper marked it `failed` and dropped its media, and a bulk item was never stored.
+- Send pacing: find a contact's history under either spelling of a Brazilian, Mexican or Argentine mobile number, and under a number an earlier send showed WhatsApp resolves it to, so a send to a known contact is not counted as a new conversation.
+- Messages: store inbound messages and own-send echoes when the session's webhooks cannot be read; since 0.32.0 a failed webhook lookup dropped them from history.
+- Messages: store a message on its own when it cannot be committed together with its webhook outbox rows; since 0.32.0 a failed outbox write dropped it from history.
+- Messages: store a message whose id the engine could not read once when its insert is tried again; an attempt that followed a commit that had landed stored it twice.
+- Messages: store a message revoked or edited while its insert is tried again as that change left it; `message:persisted` and the media archive were handed the earlier text once.
+- Messages: clear the stored row of a message revoked just before its commit when the engine retires in the same moment; the row kept the taken-back text and media.
+- Messages: write an edit, a reaction or a delivery receipt that reached a message in flight to its row when the engine retires as the commit lands; the row kept the text from before the edit, and the sweep delivered it.
+- Messages: write a revoke or an edit that reached a message in flight to the row a commit stored before reporting an error, once the database answers; the row kept the earlier text, and the sweep delivered it.
+- Messages: take back a message in flight when a delete through the API names the list id of a broadcast-list message received on Baileys; it was stored and delivered with the deleted text.
+- Messages: clear the stored row of a message revoked just before its commit when a `message:received` or `message:sent` handler filed it under another chat; the row kept the taken-back text and media.
+- Messages: a delete or edit through the API reaches the stored row when the engine keeps the message under another form of the named chat, such as the sender of a Baileys broadcast-list message deleted by its list id, or the lid of a contact named by phone number; the row kept the text.
+- Messages: a revoke, edit, reaction, receipt or history tombstone naming the chat the engine reported reaches a message a `message:received` or `message:sent` handler filed under another chat, direction or author, and one naming the chat the handler chose no longer does; such changes were dropped, announcement included.
+- Messages: on whatsapp-web.js, a revoke, edit, reaction, delete or history tombstone naming the chat a message id names reaches a message a handler filed under another chat before the upgrade; it was dropped.
+- Messages: a delete or edit through the API naming the engine's chat reaches the stored row of a message a handler filed under another chat; the row kept the text.
+- Plugins: a deleted message a handler filed under another chat reaches `message:received` with no content when it is delivered again; it carried the deleted text.
+- Webhooks: a delete or revoke of a message a handler filed under another chat redacts or closes its pending outbox row; the sweep could deliver the deleted text.
+- Webhooks: close the pending outbox row of a message revoked just before its commit when the engine retires before the commit's failure is handled; the sweep delivered the taken-back text afterwards.
+- Messages: keep a revoke, edit, reaction or receipt the database refused and write it once it answers; it was dropped, or written to a row it was not judged against.
+- Messages: store a message received while the database refused writes once it answers; its webhook went out but no row was written, so history and search missed it.
+- Messages: keep a Baileys encrypted edit or reaction, poll vote or RSVP whose message could not be read while the database was down, and apply it once it answers; it was dropped as unreadable.
+- Messages: keep the Baileys copy of a message received or sent while the database was down and write it once it answers; later edits, reactions, votes and RSVPs of the message were dropped as unreadable.
+- Messages: keep a delete or edit of a Baileys message copy refused while the database was down and apply it once it answers; a delete left the taken-back text in the copy, to quote, forward or resend.
+- Messages: keep a delivery or read ack the database refused and advance the message once it answers; the status stayed behind for good.
+- Baileys: keep a clear of an unlinked account's stored messages and chat states the database refused, and run it once it answers; the next account to link the session saw them.
+- Baileys: never give up a kept clear of an unlinked account for a full lane; a burst of received messages in the same outage dropped it.
+- Baileys: run a kept clear of an unlinked account once the database answers, with no engine on the node; it waited for the session's engine, which may never run there again.
+- Baileys: hide an unlinked account's stored rows from the start after a restart while its kept clear waits; they were readable until it ran.
+- Backups: leave out the stored messages and chat states an unlinked account left while its kept clear waits; a restore handed them to the next account.
+- Baileys: keep a chat's pin, mute, archive or deletion mark the database refused and write it once it answers unless a newer one landed; it was lost, and a deleted chat came back after a restart.
+- Messages: keep history messages the database refused and store them once it answers; they were lost and never synced again.
+- Chats: keep the removal of a cleared or deleted chat's stored messages the database refused and run it once it answers; they stayed in the API.
+- Statuses: give up a kept status with its media first once the recovery byte budget is spent; a burst of them pushed out kept messages and changes.
+- Baileys: keep the removal of a stored copy a conflicting delivery left, refused by the database, and run it once it answers; the copy judged the real message's changes.
+- Statuses: keep a received status, or its poster's delete, the database refused and apply it once it answers; the status was never stored, or a deleted one stayed listed until it expired.
+- Messages: keep the replace of a forward placeholder by its send's echo, refused by the database, and run it once it answers; the row stayed a forward with no content.
+- Sessions: write a session's status changes in the order they happen; on PostgreSQL one could land after the next and leave a stale status, such as `ready` on a session that had dropped.
+- Sessions: keep a status write the database refused and write it once it answers, at the next start before the boot reset; a lost FAILED stayed until the next status write, and the reset and auto-start acted on the stale one.
+- Sessions: keep the row a READY writes, its number included, when the database refused it, and write it once it answers, at the next start before auto-start reads it; a restart first left the session without its number, and auto-start skipped it.
+- Sessions: keep the clear of a session's number after WhatsApp unlinked it, or after a logout, when the database refused it, and write it once it answers; the old number stayed, auto-start brought the session back to a QR, and linking another number was refused.
+- Sessions: keep the stop a force-kill or a stop during a start records, and the clear of a failed delete's record, when the database refused it, and write it once it answers; the next boot or a takeover started the stopped session again, or a failed delete kept it down.
+- Bulk: fail the batches a vanished node left unfinished once the database answers, when it refused that reap as this node took the session over; on SQLite they stayed processing until the next restart.
+- Webhooks: keep an event whose webhooks could not be read or whose outbox rows could not be written, and dispatch it once the database answers under the same idempotency key; it was lost.
+- Webhooks: a revoke withdraws the queued, retrying and kept deliveries of the message and its `message.edited` deliveries, and clears the copy a failure row keeps for a redrive; they delivered the taken-back text.
+- Webhooks: a delete through the API, or an edit, reaches the queued, retrying and kept deliveries of the message; they delivered the original text.
+- Webhooks: hold a message's deliveries while a change of it is kept, so the sweep, a retry or a queued job does not send the copy that change withdraws or rewrites.
+- Webhooks: a retry or a queued job that cannot read its outbox row waits without spending an attempt.
+- Webhooks: record a message delivery whose kept copy was dropped past its byte bound during a database outage as a delivery failure instead of sending it, with none of its data once its message was revoked, deleted or edited; a later revoke could not reach its text.
+- Messages: clear the row of a group member's revoke naming a phone when the row is stored as the revoke is written and its LID author's failed write was forgotten past `LID_MAPPING_CACHE_MAX`; the row kept the taken-back text.
+- Plugins: keep the gateway's `from`, `to`, `fromMe`, `timestamp`, `type`, `author`, `isLidSender` and `ephemeralDuration`, and the chat's `isGroup` and `kind`, when a `message:received` or `message:sent` handler leaves them out, returns them as `null` or in another type, or removes them from the message it was handed; such a message was not stored.
+- Plugins: keep one handler's redaction when a later `message:received` or `message:sent` handler removes the `id` or `chatId` of the message it was handed; the original text and media were stored and delivered.
+- Infrastructure: `GET /api/infra/export-data` streams the backup from one snapshot of the database, a batch of rows at a time, instead of building it in memory, so a large table no longer fails with `Invalid string length` or exhausts the heap.
+- Infrastructure: one data export runs at a time (`409` `EXPORT_IN_PROGRESS`), a download is ended after 60 minutes or 10 idle minutes, and a failure after the first byte resets the connection instead of ending the body.
+- Infrastructure: `POST /api/infra/import-data` refuses a backup the process has no memory to parse instead of running out of heap on it (a 483 MB body ended a gateway with a 1 GiB heap).
+- Infrastructure: during a SQLite restore a request with a body waits unread ahead of the in-flight body budget, at most 256 at once, so a parked upload holds neither its whole body nor a budget reservation; one whose client left is dropped.
+- Infrastructure: request validation no longer copies every row of a backup posted to `POST /api/infra/import-data`, which held the gateway for about 4 s per 45,000 messages on SQLite and PostgreSQL alike.
+- Infrastructure: a SQLite restore through `POST /api/infra/import-data` writes on a connection of its own, 500 rows at a time, so health checks, websockets and WhatsApp sessions keep being served while other data requests wait for it.
+- Database: SQLite in WAL mode cuts the `-wal` file back to 64 MiB once the log starts over, instead of keeping the size a long read such as a data export let it reach.
+- Dashboard: the backup download saves the export as received (compact JSON) instead of parsing and re-serializing it, which copied a large backup twice in the browser, and reports a download that was cut short instead of saving it.
+- Audit: stop writing an `api_key_auth_failed` row for the dashboard's signed-out `GET /api/auth/session` check on every login-page visit; a rejected key or session cookie is still recorded.
+- Plugins: a webhook delivery whose handler awaits a `ctx` call when the dispatch budget runs out always fails as a dispatch timeout (504), no longer sometimes with the handler's error.
+- Dashboard: an Escape pressed the moment a dialog or a hovered filter popover appears closes it, instead of being lost until its key handling was bound.
+- Sessions: when the status write for a ready, QR or terminal failure fails with a database error, the `session.authenticated` and `session.qr` notifications, their hooks, the ready follow-ups and the `session:error` hook still run while the node owns the session, instead of being dropped.
+- API: a request the database cannot serve, such as one PostgreSQL refuses a connection for, answers `503` instead of `500`.
+- Recovery: keep a write the database refused because its host did not resolve or could not be reached, instead of giving it up after three tries.
+- Integration: a redrive takes each delivery before it dispatches it, so neither the reconciler nor another redrive sends it again meanwhile; a take left unsettled by a stopped node or a failed database write is taken again after five minutes.
+- Messages: a keyed send that never reached the engine frees its `Idempotency-Key` when the database refused it, or once its request has stalled for ten minutes, so the retry sends it once instead of answering `409`.
 - whatsapp-web.js: a session that is not linked yet gets a QR code again on WhatsApp Web's `/login/` page, where the start failed with `auth timeout`. Thanks @pycriador for the fix, and @ebnhatem, @JBrito19 and @JosueAshton for the reports.
 
 ## [0.32.1] - 2026-11-24

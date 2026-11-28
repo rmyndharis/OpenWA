@@ -1,5 +1,13 @@
 import { MessageDirection } from '../message/entities/message.entity';
-import { mutationTargetsForeignRow, mutationTargetsForeignRowPersisted } from './message-mutation-guard';
+import {
+  mutationTargetsForeignRow,
+  mutationTargetsForeignRowPersisted,
+  phoneKey,
+  receiptTargetsForeignRow,
+  receiptTargetsForeignRowPersisted,
+  phoneSpellings,
+  storedSpellings,
+} from './message-mutation-guard';
 
 const OUT = MessageDirection.OUTGOING;
 const IN = MessageDirection.INCOMING;
@@ -114,6 +122,95 @@ describe('mutationTargetsForeignRow', () => {
     }
   });
 
+  // A delete or edit through the API names the chat the engine found the message in and the one its caller named.
+  it('takes a change through the API when the chat its caller named is the row chat', async () => {
+    const row = { chatId: direct, direction: OUT };
+    const source = { kind: 'revoke' as const, chatId: '111@lid', callerChatId: direct };
+    expect(mutationTargetsForeignRow(row, source)).toBeNull();
+    expect(mutationTargetsForeignRow({ chatId: '111@lid', direction: OUT }, source)).toBeNull();
+    // Foreign only when both chats say so, and the reason is the first one's.
+    expect(mutationTargetsForeignRow({ chatId: '628777@c.us', direction: OUT }, source)).toBe('chat');
+    expect(mutationTargetsForeignRow(row, { ...source, kind: 'edit', fromMe: false })).toBe('chat');
+    // A lid named by the caller is resolved like the engine's.
+    const lidCaller = { kind: 'revoke' as const, chatId: '628777@c.us', callerChatId: '222@lid' };
+    expect(await mutationTargetsForeignRowPersisted(row, lidCaller, () => Promise.resolve('628111'))).toBeNull();
+    expect(await mutationTargetsForeignRowPersisted(row, lidCaller, () => Promise.resolve(null))).toBe('chat');
+  });
+
+  // A row a message hook filed elsewhere keeps what the engine reported, and only that judges a change to it.
+  it('judges a row a hook moved by its engine ref alone', async () => {
+    const moved = { chatId: '628999@c.us', direction: OUT, engineRef: { chatId: direct, direction: IN } };
+    expect(mutationTargetsForeignRow(moved, { kind: 'revoke', chatId: direct, fromMe: false })).toBeNull();
+    expect(mutationTargetsForeignRow(moved, { kind: 'revoke', chatId: '628999@c.us', fromMe: true })).toBe('chat');
+    // Neither the chat an API caller named nor how a delivery was filed brings the filed columns back.
+    const filedChat = { chatId: '628999@c.us', fromMe: true };
+    expect(
+      mutationTargetsForeignRow(moved, { kind: 'revoke', chatId: '628777@c.us', callerChatId: '628999@c.us' }),
+    ).toBe('chat');
+    expect(mutationTargetsForeignRow(moved, { kind: 'edit', chatId: '628777@c.us', filedAs: filedChat })).toBe('chat');
+    // A row without one may take a delivery as a hook filed it.
+    const legacy = { chatId: '628999@c.us', direction: OUT };
+    expect(mutationTargetsForeignRow(legacy, { kind: 'edit', chatId: direct, filedAs: filedChat })).toBeNull();
+    expect(
+      await mutationTargetsForeignRowPersisted(
+        { chatId: '111@lid', direction: IN, engineRef: { chatId: '222@lid', direction: IN } },
+        { kind: 'revoke', chatId: direct, fromMe: false },
+        jid => Promise.resolve(jid === '222@lid' ? '628111' : null),
+      ),
+    ).toBeNull();
+  });
+
+  // An API send addressed to a phone id that the engine delivered to the contact's lid is filed under the phone id, and
+  // keeps the lid it went to: both are the message's chat, and no other chat is.
+  it('judges the row of a send delivered to another chat than its caller addressed by both chats', async () => {
+    const lid = '111@lid';
+    const sent = {
+      chatId: direct,
+      direction: OUT,
+      engineRef: { chatId: lid, direction: OUT, addressed: true as const },
+    };
+    for (const kind of ['edit', 'revoke', 'reaction'] as const) {
+      expect(mutationTargetsForeignRow(sent, { kind, chatId: lid, fromMe: true })).toBeNull();
+      expect(mutationTargetsForeignRow(sent, { kind, chatId: direct, fromMe: true })).toBeNull();
+      expect(mutationTargetsForeignRow(sent, { kind, chatId: '222@lid', fromMe: true })).toBe('chat');
+      expect(mutationTargetsForeignRow(sent, { kind, chatId: '628999@c.us', fromMe: true })).toBe('chat');
+    }
+    // Each chat still holds its side: the contact cannot edit or take back the account's message from either.
+    expect(mutationTargetsForeignRow(sent, { kind: 'edit', chatId: lid, fromMe: false })).toBe('direction');
+    // Foreign to both, the reason is the engine ref's.
+    expect(mutationTargetsForeignRow(sent, { kind: 'revoke', chatId: direct, fromMe: false })).toBe('chat');
+    // A change through the API whose caller named the phone id, which the engine found under a third chat.
+    expect(mutationTargetsForeignRow(sent, { kind: 'revoke', chatId: '333@lid', callerChatId: direct })).toBeNull();
+    // A third lid takes it only through a reported pairing with the phone id, as for any row filed under it.
+    const paired = (jid: string) => Promise.resolve(jid === '222@lid' ? '628111' : null);
+    expect(await mutationTargetsForeignRowPersisted(sent, { kind: 'reaction', chatId: '222@lid' }, paired)).toBeNull();
+    expect(
+      await mutationTargetsForeignRowPersisted(sent, { kind: 'reaction', chatId: '222@lid' }, () =>
+        Promise.resolve(null),
+      ),
+    ).toBe('chat');
+    // A ref a hook wrote is not addressed: the columns it chose take nothing.
+    const moved = { ...sent, engineRef: { chatId: lid, direction: OUT } };
+    expect(mutationTargetsForeignRow(moved, { kind: 'reaction', chatId: direct })).toBe('chat');
+  });
+
+  it('takes a receipt from either chat of a send delivered to another chat than its caller addressed', async () => {
+    const lid = '111@lid';
+    const sent = {
+      chatId: direct,
+      direction: OUT,
+      engineRef: { chatId: lid, direction: OUT, addressed: true as const },
+    };
+    expect(receiptTargetsForeignRow(sent, lid)).toBe(false);
+    expect(receiptTargetsForeignRow(sent, direct)).toBe(false);
+    expect(receiptTargetsForeignRow(sent, group)).toBe(true);
+    // A third lid the directory pairs with another phone is foreign to both chats; with the row's phone, to neither.
+    const elsewhere = (jid: string) => Promise.resolve(jid === '222@lid' ? '628999' : null);
+    expect(await receiptTargetsForeignRowPersisted(sent, '222@lid', elsewhere)).toBe(true);
+    const here = (jid: string) => Promise.resolve(jid === '222@lid' ? '628111' : null);
+    expect(await receiptTargetsForeignRowPersisted(sent, '222@lid', here)).toBe(false);
+  });
+
   // The send routes store the chat id as the caller wrote it, in either dialect the docs give, while the
   // engines report the neutral one.
   it('reads the id a REST send stored in any dialect of the chat as the same chat', () => {
@@ -185,5 +282,83 @@ describe('mutationTargetsForeignRow', () => {
     expect(
       mutationTargetsForeignRow({ chatId: direct, direction: OUT }, { kind: 'revoke', chatId: direct }),
     ).toBeNull();
+  });
+});
+
+describe('phoneSpellings', () => {
+  it.each([
+    ['a Brazilian mobile written with its ninth digit', '5511987654321', ['5511987654321', '551187654321']],
+    ['a Brazilian mobile written without it', '551187654321', ['551187654321', '5511987654321']],
+    ['a Mexican mobile written with the 1', '5215512345678', ['5215512345678', '525512345678']],
+    ['a Mexican mobile written without it', '525512345678', ['525512345678', '5215512345678']],
+    ['an Argentine mobile written with the 9', '5491123456789', ['5491123456789', '541123456789']],
+    ['an Argentine mobile written without it', '541123456789', ['541123456789', '5491123456789']],
+  ])('gives both spellings of %s, and phoneKey folds them into one number', (_case, number, spellings) => {
+    expect(phoneSpellings(number)).toEqual(spellings);
+    expect(new Set(spellings.map(phoneKey)).size).toBe(1);
+  });
+
+  it.each(['6281234567890', '14155550123', '447911123456'])('gives only %s itself, which no rule covers', number => {
+    expect(phoneSpellings(number)).toEqual([number]);
+  });
+
+  it('reads the number out of the way it is written', () => {
+    expect(phoneSpellings('+55 11 98765-4321')).toEqual(['5511987654321', '551187654321']);
+    expect(phoneSpellings('not a number')).toEqual([]);
+  });
+
+  it('never gives a spelling that phoneKey folds into another number', () => {
+    // After its marker this Argentine number goes on with a 9: taking a 9 off twice names somebody else.
+    for (const number of ['54991123456', '5499', '549', '55119', '521']) {
+      const spellings = phoneSpellings(number);
+      expect(spellings).toContain(number);
+      expect(new Set(spellings.map(phoneKey))).toEqual(new Set([phoneKey(number)]));
+    }
+  });
+});
+
+describe('storedSpellings', () => {
+  // 5511987654321 is reported for lid 999555; the number's other spelling for lid 999556.
+  const directory = {
+    resolveLid: (lid: string) => ({ '999555': '5511987654321', '999556': '551187654321' })[lid] ?? null,
+    lidsForPhone: (phone: string) => ({ '5511987654321': ['999555'], '551187654321': ['999556'] })[phone] ?? [],
+  };
+  const sameEntity = (a: string, b: string): boolean =>
+    mutationTargetsForeignRow({ chatId: a, direction: IN }, { kind: 'reaction', chatId: b }, jid =>
+      directory.resolveLid(jid.split('@')[0]),
+    ) === null;
+
+  it('gives a phone in every dialect and spelling, with the lids reported for each, all of them the same entity', async () => {
+    const ids = await storedSpellings('5511987654321@c.us', directory);
+
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        '5511987654321@c.us',
+        '5511987654321@s.whatsapp.net',
+        '5511987654321@hosted',
+        '551187654321@c.us',
+        '551187654321@s.whatsapp.net',
+        '999555@lid',
+        '999555@hosted.lid',
+        '999556@lid',
+      ]),
+    );
+    for (const id of ids) expect(sameEntity(id, '5511987654321@c.us')).toBe(true);
+  });
+
+  it('gives a lid with the phone reported for it, and no other lid of that phone', async () => {
+    const ids = await storedSpellings('999555@lid', directory);
+
+    expect(ids).toEqual(
+      expect.arrayContaining(['999555@lid', '999555@hosted.lid', '5511987654321@c.us', '551187654321@s.whatsapp.net']),
+    );
+    expect(ids).not.toContain('999556@lid');
+    for (const id of ids) expect(sameEntity(id, '999555@lid')).toBe(true);
+  });
+
+  it('gives an unpaired lid, a group and an unknown id only as themselves', async () => {
+    expect(await storedSpellings('111@lid', directory)).toEqual(['111@lid', '111@hosted.lid']);
+    expect(await storedSpellings('120363000000000001@g.us', directory)).toEqual(['120363000000000001@g.us']);
+    expect(await storedSpellings('status@broadcast', directory)).toEqual(['status@broadcast']);
   });
 });

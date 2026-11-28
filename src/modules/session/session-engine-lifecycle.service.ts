@@ -1,14 +1,14 @@
 import { Injectable, HttpException, HttpStatus, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource, FindOptionsWhere, IsNull } from 'typeorm';
+import { Repository, DataSource, FindOptionsWhere, IsNull, type UpdateResult } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { decideReconnect, clampNumber, STABLE_READY_MS, type ReconnectAttemptState } from './reconnect-policy';
 import { SessionLivenessWatchdog } from './session-liveness-watchdog.service';
-import { MessageProjector } from './message-projector.service';
+import { MessageProjector, PARKED_CHANGES_SHUTDOWN_PASS_MS } from './message-projector.service';
 import { SessionErrorStore } from './session-error-store.service';
 import { SessionRestrictionStore } from './session-restriction-store.service';
 import { PresenceStore } from './presence-store.service';
@@ -43,6 +43,8 @@ import {
 } from './session-engine-controls';
 import { SessionOwnershipService, nodeOwnsSession } from './session-ownership.service';
 import { PhoneWrites } from './session-phone-writes';
+import { SessionRows } from './session-row-park';
+import { RecoveryQueue } from '../../common/utils/recovery-queue';
 
 /**
  * Eager status-history reads are opt-in. On affected freshly paired whatsapp-web.js accounts,
@@ -99,6 +101,12 @@ export interface ReconnectState extends ReconnectAttemptState {
 const RECONNECT_BASE_DELAY_MIN_MS = 1000;
 const RECONNECT_BASE_DELAY_MAX_MS = 300_000;
 const RECONNECT_MAX_ATTEMPTS_CAP = 20;
+
+/**
+ * Readers remembered per QR code for its audit row. A code lives tens of seconds and is read by one or two
+ * clients, so this is never reached in normal use; a reader past it gets a row on every read instead.
+ */
+export const QR_AUDIT_READERS_PER_CODE = 32;
 
 /** Coerce + clamp the untyped session.config reconnect knobs to finite, bounded values. Defaults are
  *  a 5000ms base delay and UNLIMITED attempts (`Infinity`): a long-lived session must keep retrying
@@ -324,6 +332,10 @@ export class SessionEngineLifecycle {
   // successful); and a COMMITTED delete (after the parent transaction). NOT cleared on a rejected
   // start, executeReconnect, disconnect, QR, auth failure, engine replacement, or a failed/409 delete.
   private readonly stuckAuthRecoveryUsed = new Set<string>();
+  // The QR code last recorded in the audit log per session and the readers it was recorded for, so a client
+  // polling one code writes one row. At most one entry per session, dropped when it authenticates and when
+  // its engine retires (stop, delete, replacement).
+  private readonly auditedQr = new Map<string, { qr: string; readers: Set<string> }>();
   // Moved each time this node records a terminal unlink of a session it owns. A start or an engine holding the
   // binding it read before the move treats it as gone, instead of depending on when the row write lands.
   private readonly bindingEpochs = new Map<string, number>();
@@ -331,6 +343,8 @@ export class SessionEngineLifecycle {
   // name, a logout's clear) are issued in order, and a row read that acts on the phone waits for them, so it cannot
   // return the binding they replace.
   private readonly phoneWrites = new PhoneWrites();
+  /** The session row writes the database refused, kept until it answers (see SessionRows). */
+  readonly rows: SessionRows;
 
   constructor(
     @InjectRepository(Session, 'data')
@@ -380,6 +394,7 @@ export class SessionEngineLifecycle {
           'Review the API keys whose allowed chats name either id or this number.',
       });
     });
+    this.engineRegistry.onRetire(id => this.auditedQr.delete(id));
     // The fence Maps are handed over BY REFERENCE: they stay lifecycle fields (specs poke them
     // through the lifecycle), while the fence logic operates on the same instances.
     this.fences = new SessionLifecycleFences({
@@ -388,11 +403,20 @@ export class SessionEngineLifecycle {
       pendingInitialStatuses: this.pendingInitialStatuses,
       logger: this.logger,
     });
+    const recovery = this.webhookService.recoveryQueue?.();
+    this.rows = new SessionRows({
+      repository: this.sessionRepository,
+      queue: recovery instanceof RecoveryQueue ? recovery : undefined,
+      ownership: this.ownership,
+      logger: this.logger,
+      announce: (id, status) => this.broadcaster.announce(id, status),
+    });
     this.broadcaster = new SessionStatusBroadcaster({
       sessionRepository: this.sessionRepository,
       eventsGateway: this.eventsGateway,
       webhookService: this.webhookService,
       logger: this.logger,
+      rows: this.rows,
     });
     this.leafEvents = new SessionEngineLeafEvents({
       sessionRepository: this.sessionRepository,
@@ -474,6 +498,7 @@ export class SessionEngineLifecycle {
       dataSource: () => this.dataSource,
       fences: this.fences,
       broadcaster: this.broadcaster,
+      rows: this.rows,
       cancelReconnect: id => this.cancelReconnect(id),
       initializeEngine: (id, session) => this.initializeEngine(id, session),
       isSessionRetired: id => this.isSessionRetired(id),
@@ -482,6 +507,7 @@ export class SessionEngineLifecycle {
       forgetBindingEpoch: id => {
         this.bindingEpochs.delete(id);
         this.phoneWrites.forget(id);
+        this.rows.forget(id);
       },
       forgetClaim: (id, ownsClaim) => this.ownership?.forget(id, ownsClaim),
       readAfterPhoneWrites: (id, read) => this.phoneWrites.readSettled(id, read),
@@ -539,18 +565,48 @@ export class SessionEngineLifecycle {
     this.controls.forgetSession(id);
   }
 
+  /**
+   * True the first time `reader` is handed `qr` for `id`; false while `qr` is the code last recorded for that
+   * session and `reader` is one it was recorded for.
+   */
+  claimQrAudit(id: string, qr: string, reader: string): boolean {
+    const recorded = this.auditedQr.get(id);
+    const readers = recorded?.qr === qr ? recorded.readers : new Set<string>();
+    if (readers.has(reader)) return false;
+    // Kept only for a live engine, whose retirement drops it: a read that outlived its engine leaves nothing.
+    if (this.engines.has(id)) {
+      // A reader past the cap is not remembered, so each of its reads is recorded rather than none.
+      if (readers.size < QR_AUDIT_READERS_PER_CODE) readers.add(reader);
+      this.auditedQr.set(id, { qr, readers });
+    }
+    return true;
+  }
+
+  /** Undoes claimQrAudit for a row that could not be written, so the reader's next read writes it. */
+  releaseQrAudit(id: string, qr: string, reader: string): void {
+    const recorded = this.auditedQr.get(id);
+    if (recorded?.qr === qr) recorded.readers.delete(reader);
+  }
+
   /** Delegate: SessionEngineControls.holdDelete. */
   holdDelete(id: string): () => void {
     return this.controls.holdDelete(id);
   }
 
-  /** Delegate: SessionEngineControls.shutdown. */
-  shutdown(): Promise<void> {
+  /**
+   * Delegate: SessionEngineControls.shutdown. Once the engines are gone, one bounded pass writes what the database
+   * refused while it was away (see MessageProjector.settleParkedChanges).
+   */
+  async shutdown(): Promise<void> {
     this.closed = true;
     for (const id of [...this.reconnectStates.keys()]) {
       this.cancelReconnect(id);
     }
-    return this.controls.shutdown();
+    try {
+      await this.controls.shutdown();
+    } finally {
+      await this.messages.settleParkedChanges(PARKED_CHANGES_SHUTDOWN_PASS_MS);
+    }
   }
 
   /** Delegate: SessionEngineControls.stopOrphanEngines. */
@@ -945,7 +1001,19 @@ export class SessionEngineLifecycle {
                   { id, nodeId },
                   { id, nodeId: IsNull() },
                 ];
-          const { affected } = await this.sessionRepository.update(ours, { status: SessionStatus.DISCONNECTED });
+          const live = this.rows.begin(id, 'status');
+          if (live.wait) await live.wait;
+          const superseded = this.rows.kept(id, 'status');
+          let affected: number | undefined;
+          try {
+            ({ affected } = await this.sessionRepository.update(ours, { status: SessionStatus.DISCONNECTED }));
+          } catch (error) {
+            this.rows.keepSet(id, 'status', SessionStatus.DISCONNECTED, error, { owners: this.rows.owners() });
+            throw error;
+          } finally {
+            live.end();
+          }
+          if (affected !== 0) this.rows.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
           // A replacement may reach READY while the database response is still pending.
           if (affected !== 0 && isCurrentTimeout()) this.broadcaster.announce(id, SessionStatus.DISCONNECTED);
         }
@@ -1084,6 +1152,7 @@ export class SessionEngineLifecycle {
     // READY proves any in-flight stuck-auth recovery succeeded (or none was needed), so the
     // one-shot recovery budget is re-armed for a future episode.
     this.stuckAuthRecoveryUsed.delete(id);
+    this.auditedQr.delete(id);
 
     const emitReadyEffects = (): void => {
       this.logger.log('Session ready', {
@@ -1133,26 +1202,73 @@ export class SessionEngineLifecycle {
       }
     };
 
-    // The status and times of a READY are written at once, fenced on this node's ownership when
-    // SessionOwnershipService is wired. Only the number it links waits behind the phone writes of the
-    // session: held with it, the status could land after a stop or a failure that followed this READY
-    // and put the session back to READY with no engine.
+    // The status and times of a READY wait only for the status writes issued before them, fenced on this
+    // node's ownership when SessionOwnershipService is wired. Only the number it links waits behind the phone
+    // writes of the session: held with it, the status could land after a stop or a failure that followed this
+    // READY and put the session back to READY with no engine. Each part the database refuses is kept to be
+    // written once it answers, so a restart before then does not lose the number auto-start needs.
     const where = this.ownedRowWhere(id);
-    const { status, connectedAt, lastActiveAt, ...binding } = readyRowUpdate(phone, pushName, new Date());
+    const at = new Date();
+    const { status, connectedAt, lastActiveAt, ...binding } = readyRowUpdate(phone, pushName, at);
+    const owners = this.rows.owners();
     const persistFailed = (err: unknown): void =>
       this.logger.warn('Failed to persist session ready state', {
         sessionId: id,
         error: err instanceof Error ? err.message : String(err),
       });
-    const statusWrite = this.sessionRepository.update(where, { status, connectedAt, lastActiveAt });
+    const statusLive = this.rows.begin(id, 'status');
+    const writeStatus = (): Promise<UpdateResult> => {
+      const statusKept = this.rows.kept(id, 'status');
+      return this.sessionRepository.update(where, { status, connectedAt, lastActiveAt }).then(
+        result => {
+          statusLive.end();
+          const landed = (result as { affected?: number } | undefined)?.affected !== 0;
+          if (landed) this.rows.landed(id, 'status', status, statusKept);
+          return result;
+        },
+        (error: unknown) => {
+          const times = { connectedAt: at.toISOString(), lastActiveAt: at.toISOString() };
+          this.rows.keepSet(id, 'status', status, error, { owners, with: times });
+          statusLive.end();
+          throw error;
+        },
+      );
+    };
+    const statusWrite = statusLive.wait ? statusLive.wait.then(writeStatus) : writeStatus();
     if (binding.phone) {
-      void this.phoneWrites.run(id, () => this.sessionRepository.update(where, binding)).catch(persistFailed);
+      const linked = binding.phone;
+      void this.phoneWrites
+        .run(id, () => {
+          const live = this.rows.begin(id, 'phone');
+          const issue = (): Promise<void> => {
+            const bindingKept = this.rows.kept(id, 'phone');
+            return this.sessionRepository.update(where, binding).then(
+              result => {
+                live.end();
+                const landed = (result as { affected?: number } | undefined)?.affected !== 0;
+                if (landed) this.rows.landed(id, 'phone', linked, bindingKept);
+              },
+              (error: unknown) => {
+                this.rows.keepSet(id, 'phone', linked, error, { owners, with: { pushName: binding.pushName } });
+                live.end();
+                throw error;
+              },
+            );
+          };
+          return live.wait ? live.wait.then(issue) : issue();
+        })
+        .catch(persistFailed);
     }
 
     if (this.ownership) {
       // With ownership enabled, wait for the fenced DB write so a stale-owned TOCTOU race where a
       // peer already claimed the row (affected === 0) suppresses ready webhooks, WS events, and hooks.
+      // A write that fails says nothing about the owner: it is logged, and the gate below still decides.
       void statusWrite
+        .catch((err: unknown) => {
+          persistFailed(err);
+          return undefined;
+        })
         .then(result => {
           const updated = (result as { affected?: number } | undefined)?.affected !== 0;
           if (!updated || !this.ownsSession(id) || !this.isLiveEngine(id, engine)) {
@@ -1184,6 +1300,7 @@ export class SessionEngineLifecycle {
     const where = this.ownedRowWhere(id);
     void this.phoneWrites
       .run(id, () => this.sessionRepository.update(where, { pushName }))
+      .then(() => this.rows.pushNameWritten(id))
       .catch(err =>
         this.logger.warn('Failed to store the synced push name', {
           sessionId: id,
@@ -1477,7 +1594,8 @@ export class SessionEngineLifecycle {
    * write is fenced. Fire-and-forget: no await may sit between the callers' identity fences.
    * Reported without the live engine (`ownRowsOnly`), the in-memory ownership can outlast the claim (a launch
    * retired for a lost claim), so the clear lands only on a row that is still this node's or unowned, the
-   * predicate retireLaunchedEngine writes under.
+   * predicate retireLaunchedEngine writes under. A clear the database refuses is kept and written once it
+   * answers: nothing else clears the number, and a different number linking next would be refused.
    */
   private recordTerminalUnlink(id: string, reason: string, ownRowsOnly = false): boolean {
     if (!this.ownsSession(id)) return false;
@@ -1489,7 +1607,26 @@ export class SessionEngineLifecycle {
     this.bindingEpochs.set(id, (this.bindingEpochs.get(id) ?? 0) + 1);
     const where = this.ownedRowWhere(id, ownRowsOnly);
     void this.phoneWrites
-      .run(id, () => this.sessionRepository.update(where, { phone: null }))
+      .run(id, () => {
+        const live = this.rows.begin(id, 'phone');
+        const issue = (): Promise<void> => {
+          const superseded = this.rows.kept(id, 'phone');
+          return this.sessionRepository.update(where, { phone: null }).then(
+            result => {
+              live.end();
+              if ((result as { affected?: number } | undefined)?.affected !== 0) {
+                this.rows.landed(id, 'phone', null, superseded);
+              }
+            },
+            (error: unknown) => {
+              this.rows.keepSet(id, 'phone', null, error, { owners: this.rows.owners() });
+              live.end();
+              throw error;
+            },
+          );
+        };
+        return live.wait ? live.wait.then(issue) : issue();
+      })
       .catch((err: unknown) =>
         this.logger.warn('Failed to clear phone after a terminal unlink', {
           sessionId: id,
@@ -1648,20 +1785,24 @@ export class SessionEngineLifecycle {
       // automatically. The in-memory error above is per-process and harmless either way.
       if (this.ownsSession(id)) {
         const ownerNodeId = this.ownership?.nodeId;
+        const persistFailed = (err: unknown): void =>
+          this.logger.warn('Failed to persist the reconnect-exhausted FAILED state', {
+            sessionId: id,
+            error: err instanceof Error ? err.message : String(err),
+          });
         void this.updateStatus(id, SessionStatus.FAILED, { ownerNodeId })
-          .then(updated => {
-            if (updated) {
-              // The hook signal a terminal failure carries: a failed re-init no longer fires session:error per
-              // attempt, so the episode's one terminal end reports it here.
-              void this.hookManager.execute('session:error', { reason }, { sessionId: id, source: 'SessionService' });
-            }
+          // A write that fails says nothing about the owner: it is logged, and the gate below decides.
+          .catch((err: unknown) => {
+            persistFailed(err);
+            return undefined;
           })
-          .catch(err =>
-            this.logger.warn('Failed to persist the reconnect-exhausted FAILED state', {
-              sessionId: id,
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          );
+          .then(updated => {
+            if (updated === false || (updated === undefined && !this.ownsSession(id))) return;
+            // The hook signal a terminal failure carries: a failed re-init no longer fires session:error per
+            // attempt, so the episode's one terminal end reports it here.
+            void this.hookManager.execute('session:error', { reason }, { sessionId: id, source: 'SessionService' });
+          })
+          .catch(persistFailed);
       }
       // Terminal path: evict the dead engine so it neither holds a concurrency slot nor makes a
       // subsequent start() reject the session as "already started". This mirrors onError's terminal

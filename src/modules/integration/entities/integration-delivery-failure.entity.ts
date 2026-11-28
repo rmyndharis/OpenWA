@@ -1,5 +1,6 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
-import { jsonColumnType } from '../../../common/utils/column-types';
+import { dateColumnType, jsonColumnType } from '../../../common/utils/column-types';
+import { DateTransformer } from '../../../common/transformers/date.transformer';
 import { NulFreeTransformer } from '../../../common/transformers/nul-free.transformer';
 
 // DLQ-of-record for failed inbound (ingress) deliveries; only the ingress path writes it and redrive
@@ -42,6 +43,11 @@ export class IntegrationDeliveryFailure {
 
   @Column({ default: false })
   redriven!: boolean;
+
+  // When a redrive took the row for its dispatch, until it retires the row or puts it back. Another redrive leaves the
+  // row alone meanwhile, and takes it again once this is five minutes old (RedriveService).
+  @Column({ type: dateColumnType(), nullable: true, transformer: DateTransformer })
+  claimedAt!: Date | null;
 
   @CreateDateColumn()
   createdAt!: Date;

@@ -31,3 +31,13 @@ export function shouldOfferStopOrphansRetry(
   if (alreadyRetriedWithStopOrphans) return false;
   return code === 'IMPORT_WOULD_ORPHAN_ENGINES';
 }
+
+/**
+ * The translation key for a refusal the dashboard explains in its own words, or undefined to show the gateway's
+ * message. 503 IMPORT_STOPPED: the gateway stopped while a SQLite restore ran and rolled it back, so nothing changed
+ * and the same file can be imported again once it is back. A 503 without that code (a proxy, a draining gateway)
+ * keeps its own message.
+ */
+export function importRefusalMessageKey(status: number | undefined, code: string | undefined): string | undefined {
+  return status === 503 && code === 'IMPORT_STOPPED' ? 'infrastructure.migration.importStopped' : undefined;
+}

@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { recordOsEnvKeys, recordPinnedEnvKeys } from '../../config/env-precedence';
 import {
   applyDatabaseSection,
+  applyEngineSection,
   applyRedisSection,
   applyStorageSection,
   type ConfigSectionContext,
@@ -547,5 +548,75 @@ describe('PostgreSQL pool size', () => {
     applyDatabaseSection({ type: 'postgres', builtIn: false, ...external, poolSize }, {}, ctx);
 
     expect(ctx.updates.DATABASE_POOL_SIZE).toBe(written);
+  });
+});
+
+// The page sends both paths back with every save. `./uploads` is the storage path v0.2.0 to v0.7.3 saved.
+describe.each([
+  [
+    'storage.localPath',
+    'STORAGE_LOCAL_PATH',
+    './uploads',
+    './data/../uploads',
+    (value: string, existing: Record<string, string>, ctx: ConfigSectionContext) =>
+      applyStorageSection({ type: 'local', localPath: value }, existing, ctx),
+  ],
+  [
+    'engine.sessionDataPath',
+    'SESSION_DATA_PATH',
+    '/var/lib/openwa/sessions',
+    '/var/lib/openwa/../openwa/sessions',
+    (value: string, existing: Record<string, string>, ctx: ConfigSectionContext) =>
+      applyEngineSection({ sessionDataPath: value }, existing, ctx, {} as never),
+  ],
+])('%s already in effect outside ./data', (_field, key, current, sameTarget, apply) => {
+  const stored = { [key]: current };
+  let previousValue: string | undefined;
+  beforeEach(() => (previousValue = process.env[key]));
+  afterEach(() => {
+    if (previousValue === undefined) delete process.env[key];
+    else process.env[key] = previousValue;
+  });
+
+  it.each([current, `  ${current} `])('keeps the stored path when %j is sent back', sent => {
+    const ctx = context();
+    apply(sent, stored, ctx);
+    expect(savedValues(stored, ctx)[key]).toBe(current);
+  });
+
+  it('keeps the path the environment pins without copying it into the saved file', () => {
+    process.env[key] = current;
+    recordPinnedEnvKeys({ [key]: current });
+    const ctx = context();
+    apply(current, {}, ctx);
+    expect(ctx.updates).not.toHaveProperty(key);
+  });
+
+  it('saves a new path inside ./data', () => {
+    const ctx = context();
+    apply('./data/moved', stored, ctx);
+    expect(ctx.updates[key]).toBe('./data/moved');
+  });
+
+  it('saves a path inside ./data on an install that never stored one', () => {
+    const ctx = context();
+    apply('./data/default', {}, ctx);
+    expect(ctx.updates[key]).toBe('./data/default');
+  });
+
+  // Equal means equal after trimming spaces: a value that only resolves to the same place is a new path.
+  it.each([`${current}-2`, '/etc/openwa', '../outside', sameTarget, `${current}/`])(
+    'refuses a move to %j outside ./data',
+    sent => {
+      const ctx = context();
+      expect(() => apply(sent, stored, ctx)).toThrow(BadRequestException);
+      expect(ctx.updates).not.toHaveProperty(key);
+    },
+  );
+
+  it.each([`${current}\t`, `\n${current}`, `${current}\0`])('refuses %j, which carries a control character', sent => {
+    const ctx = context();
+    expect(() => apply(sent, stored, ctx)).toThrow(/control characters/);
+    expect(ctx.updates).not.toHaveProperty(key);
   });
 });

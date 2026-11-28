@@ -256,8 +256,8 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
   defineTableImporter({
     key: 'messages',
     label: 'message',
-    sql: `INSERT INTO messages (id, "sessionId", "waMessageId", "chatId", "chatName", author, "from", "to", body, type, direction, "timestamp", metadata, status, "createdAt", "mediaPath", "mediaMimetype")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+    sql: `INSERT INTO messages (id, "sessionId", "waMessageId", "chatId", "chatName", author, "from", "to", body, type, direction, "timestamp", metadata, status, "createdAt", "mediaPath", "mediaMimetype", "engineRef", "echoOf")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
     id: (msg: MessageRow) => msg.id,
     map: (msg: MessageRow) => [
       msg.id,
@@ -284,6 +284,10 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       // without their pointers would turn every archived file into an orphan the sweep then reaps.
       nulFree(msg.mediaPath ?? null),
       nulFree(msg.mediaMimetype ?? null),
+      // Older archives restore to NULL: the row is judged by its own columns, as before.
+      msg.engineRef == null ? null : typeof msg.engineRef === 'string' ? msg.engineRef : JSON.stringify(msg.engineRef),
+      // Older archives restore to NULL: no merge onto an echo row is left to do.
+      nulFree(msg.echoOf ?? null),
     ],
   }),
 
@@ -506,8 +510,8 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
   defineTableImporter({
     key: 'webhookOutboxEvents',
     label: 'webhook outbox event',
-    sql: `INSERT INTO webhook_outbox_events (id, "webhookId", "sessionId", event, "idempotencyKey", "deliveryId", payload, state, attempts, "lastAttemptAt", "createdAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+    sql: `INSERT INTO webhook_outbox_events (id, "webhookId", "sessionId", event, "idempotencyKey", "deliveryId", payload, state, attempts, "lastAttemptAt", "createdAt", "engineRef")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
     id: (row: WebhookOutboxEventRow) => row.id,
     map: (row: WebhookOutboxEventRow) => [
       row.id,
@@ -521,6 +525,8 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       row.attempts,
       row.lastAttemptAt,
       row.createdAt,
+      // What the engine reported of a message a handler filed elsewhere; absent from a backup of an earlier release.
+      row.engineRef == null ? null : typeof row.engineRef === 'string' ? row.engineRef : JSON.stringify(row.engineRef),
     ],
   }),
 

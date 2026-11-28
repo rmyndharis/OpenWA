@@ -35,6 +35,23 @@ export interface MessageResult {
    * row can store that label instead of the raw `buttonId`.
    */
   body?: string;
+  /**
+   * The chat the persisted row is filed under, when the engine's number lookup answered another id than the
+   * caller's chat id names. WhatsApp holds some numbers under other digits than people type (a Brazilian mobile
+   * with or without its ninth digit), and the conversation lives under the number it holds, so the row is filed
+   * there: a phone id in the neutral dialect (`<phone>@c.us`), also when the engine sent to that number's LID. It
+   * is the contact's `<lid>@lid` when WhatsApp answered only a LID, which it pairs with no phone (whatsapp-web.js).
+   */
+  resolvedChatId?: string;
+  /**
+   * The chat the engine acted in, neutral dialect: for a send, the chat the message was delivered to, reported when
+   * it is not the one the caller named; for an edit, the chat the edited message is stored under. Either can be another
+   * form of the caller's chat id (the LID of a contact the caller named by phone number). A send's row keeps it beside
+   * the chat it is filed under when the two differ, and an edit's stored row is judged by it, so a row a
+   * `message:received` or `message:sent` handler filed under another chat still takes the edit. Absent when the engine
+   * does not report it.
+   */
+  engineChatId?: string;
 }
 
 /**
@@ -1079,6 +1096,51 @@ export interface EngineEventCallbacks {
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
   /**
+   * Fired for a message the engine could not read because the stored message it needs (the secret an encrypted edit,
+   * reaction, poll vote or RSVP is read with) could not be read: the store failed, not answered that it holds none.
+   * `raw` is the message as the engine keeps it, for the session to keep and hand back once the store answers, through
+   * the engine's InboundRedelivery (inbound-redelivery.ts). Baileys only.
+   */
+  onInboundUnreadable?: (kept: { messageId: string; raw: string; targetId?: string }) => void;
+  /**
+   * Whether the session keeps a message that changes `targetId` (see onInboundUnreadable): a later edit or reaction of
+   * that message is kept behind it, so the older one, handed back later, does not undo it. Baileys only.
+   */
+  isChangeKept?: (targetId: string) => boolean;
+  /**
+   * Fired when the engine's copy of a message (the one a later edit, reaction, poll vote or RSVP of it is read with)
+   * could not be written because the database could not answer: `raw` is that copy, for the session to keep and hand
+   * back once it answers, through the engine's InboundRedelivery (inbound-redelivery.ts). Baileys only.
+   */
+  onStoredCopyRefused?: (kept: { messageId: string; raw: string }) => void;
+  /** Whether the session keeps the copy of `messageId` to be written (see onStoredCopyRefused). Baileys only. */
+  isStoredCopyKept?: (messageId: string) => boolean;
+  /**
+   * Fired when a change of the engine's copy of `messageId` could not be written because the database could not answer
+   * (`changeId` names the message that made it; `kind` a delete, `blank`, an edit, `text`, or the removal of a copy a
+   * conflicting delivery stored, `remove`): `raw` is the change, for the session to keep and hand back once it answers,
+   * through the engine's InboundRedelivery. Baileys only.
+   */
+  onStoredChangeRefused?: (kept: {
+    messageId: string;
+    changeId: string;
+    raw: string;
+    kind: 'blank' | 'text' | 'remove';
+  }) => void;
+  /**
+   * Fired when the engine starts clearing the stored messages of an account it unlinked: what the session keeps to hand
+   * back to it (onInboundUnreadable, onStoredCopyRefused) belongs to that account and is dropped, so the next account to
+   * link the session gets none of it. Not guarded on the engine still being live: the store it clears is the session's.
+   * Baileys only.
+   */
+  onStoredAccountCleared?: () => void;
+  /**
+   * Fired when the database refused that clear: `raw` holds the time it was refused at, for the session to keep and run
+   * against the engine's stores (shared services) once it answers, with or without an engine, clearing what the account
+   * wrote up to then and leaving what the next account wrote since. Baileys only.
+   */
+  onStoredAccountWipeRefused?: (kept: { raw: string }) => void;
+  /**
    * Fired for each RSVP to a WhatsApp event (consumers emit `event.response`). Baileys only: it
    * decrypts the RSVP itself from the stored event creation message. whatsapp-web.js never fires it.
    */
@@ -1310,9 +1372,17 @@ export interface MessagingCapability {
 
   /**
    * Reply to a message, quoting it. `mentions` tags participants exactly as on the send routes: the
-   * text must also carry the matching `@<number>` token for WhatsApp to render the tag.
+   * text must also carry the matching `@<number>` token for WhatsApp to render the tag. `quotedChatId`, when given,
+   * is the chat the quoted message is checked to be in, where it is not `chatId`: the chat an API send the reply quotes
+   * was delivered to. The reply still goes to `chatId`.
    */
-  replyToMessage(chatId: string, quotedMsgId: string, text: string, mentions?: string[]): Promise<MessageResult>;
+  replyToMessage(
+    chatId: string,
+    quotedMsgId: string,
+    text: string,
+    mentions?: string[],
+    options?: { quotedChatId?: string },
+  ): Promise<MessageResult>;
 
   forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult>;
 }
@@ -1338,9 +1408,15 @@ export interface MessageOperationsCapability {
    * Delete a message. Resolves the id the engine keys the deleted message by, when it reports one, so the caller can
    * clear the stored copy under that id too: whatsapp-web.js resolves the serialized id of the message it found, which
    * differs from the id it was given when that was the bare key id of a message it keys by the serialized id. An engine
-   * that keys the message by the id it was given (Baileys) resolves nothing.
+   * that keys the message by the id it was given (Baileys) reports no `id`. `engineChatId` is the chat the deleted
+   * message is stored under, as {@link MessageResult.engineChatId} says for an edit. An engine plugin written before
+   * these fields may still resolve the id alone, as a string.
    */
-  deleteMessage(chatId: string, messageId: string, forEveryone?: boolean): Promise<string | void>;
+  deleteMessage(
+    chatId: string,
+    messageId: string,
+    forEveryone?: boolean,
+  ): Promise<{ id?: string; engineChatId?: string } | string | void>;
 
   /**
    * Edit the body of a text message. Only the account's OWN messages can be edited; engines reject

@@ -306,6 +306,14 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
 
   /** Plugins the boot restore has queued (from module init on) or is enabling, so no lifecycle change interleaves. */
   private readonly restorePending = new Set<string>();
+  // Settled once the boot restore is over, the part that outlasts the boot wait included.
+  private restoreOver!: () => void;
+  private readonly restored = new Promise<void>(resolve => (this.restoreOver = resolve));
+
+  /** Settles once the boot restore is over: the hooks of every plugin it could bring back are registered by then. */
+  whenRestored(): Promise<void> {
+    return this.restored;
+  }
 
   /**
    * Whether the boot restore still has this plugin ahead of it or in flight. When the restore outlasts the
@@ -357,6 +365,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       }
     } finally {
       this.restorePending.clear();
+      this.restoreOver();
     }
   }
 

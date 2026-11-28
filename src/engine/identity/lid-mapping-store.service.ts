@@ -68,6 +68,17 @@ interface UnsettledWrite {
   failed?: boolean;
 }
 
+/**
+ * The reported rows the store answers no phone for ({@link LidMappingStoreService.rowVetoes}), as lists a query binds:
+ * lids marked unreported that have a write of their own not stored, lids a display lookup is revoking, and each lid with
+ * a phone of its own not stored, beside that phone (null: none), whose row answers no other phone.
+ */
+export interface LidRowVetoes {
+  unreported: string[];
+  revoking: string[];
+  held: Array<[string, string | null]>;
+}
+
 /** An engine reported `newLid` for a phone the table already maps to the reported `previousLid`. */
 export interface SecondLidReport {
   phone: string;
@@ -495,6 +506,32 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     return this.unsettledWrites.has(lid) || this.failedWrites.has(lid) || this.failedPhones.has(lid);
   }
 
+  /** The phone this process holds for a lid, against which a row is judged while its write is unstored. */
+  private heldPhone(lid: string): string | null | undefined {
+    return (
+      this.failedPhones.get(lid) ??
+      (this.lidToPhone.has(lid) ? this.lidToPhone.get(lid) : this.unsettledWrites.get(lid)?.reportPhone)
+    );
+  }
+
+  /**
+   * What {@link rowPhone} refuses of reported rows, for a query that judges them in the table. All but a lid whose mark
+   * the bound dropped: that one is not known by name, so a query still takes its row as reported.
+   */
+  rowVetoes(): LidRowVetoes {
+    const unstored = new Set([...this.unsettledWrites.keys(), ...this.failedWrites, ...this.failedPhones.keys()]);
+    const held: Array<[string, string | null]> = [];
+    for (const lid of unstored) {
+      const phone = this.heldPhone(lid);
+      if (phone !== undefined) held.push([lid, phone]);
+    }
+    return {
+      unreported: [...unstored].filter(lid => this.unreported.has(lid)),
+      revoking: [...this.unsettledWrites].filter(([, writing]) => writing.revoking).map(([lid]) => lid),
+      held,
+    };
+  }
+
   /**
    * The phone a lid's row answers. The table is the truth across nodes, but while a phone this process holds
    * for the lid is not stored yet, a row that differs may be the number it replaces: the lid then answers
@@ -517,8 +554,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       !(writing?.reportPhone && !writing.failed)
     )
       return null;
-    const cached =
-      this.failedPhones.get(lid) ?? (this.lidToPhone.has(lid) ? this.lidToPhone.get(lid) : writing?.reportPhone);
+    const cached = this.heldPhone(lid);
     return this.unstored(lid) && cached !== undefined && cached !== phone ? null : phone;
   }
 

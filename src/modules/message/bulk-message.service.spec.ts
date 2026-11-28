@@ -1214,6 +1214,19 @@ describe('BulkMessageService.processBatch', () => {
     );
   });
 
+  it('hands the number WhatsApp resolved on with the row, when the engine names one', async () => {
+    repo.findOne.mockResolvedValue(makeBatch(1));
+    engine.sendTextMessage.mockResolvedValue({ id: 'wa1', timestamp: 111, resolvedChatId: '551187654321@c.us' });
+
+    await runProcessBatch();
+
+    expect(messageService.saveOutgoingMessage).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ waMessageId: 'wa1', chatId: 'c0@c.us', resolvedChatId: '551187654321@c.us' }),
+      expect.anything(),
+    );
+  });
+
   it('persists the media and caption the item type sent, not a stray key on the same item', async () => {
     engine.sendVideoMessage = jest.fn().mockResolvedValue({ id: 'wa1', timestamp: 111 });
     const batch = makeBatch(2);

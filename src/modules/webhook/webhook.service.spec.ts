@@ -1,3 +1,4 @@
+import { MessageDirection } from '../message/entities/message.entity';
 // SSRF protection is now ON by default; resolve any host to a public IP so existing
 // dispatch/create tests stay offline. Literal-IP tests (8.8.8.8 / 127.0.0.1) bypass lookup.
 jest.mock('dns/promises', () => ({
@@ -626,10 +627,11 @@ describe('WebhookService', () => {
       const delivery = testingModule.get<WebhookDeliveryService>(WebhookDeliveryService);
       const dispatchSpy = jest.spyOn(delivery, 'dispatch').mockResolvedValue(undefined);
 
-      await service.dispatch('sess-1', 'message.received', { x: 1 });
+      const engineRef = { chatId: '628111@c.us', direction: MessageDirection.INCOMING };
+      await service.dispatch('sess-1', 'message.received', { x: 1 }, { engineRef });
 
       expect(dispatchSpy).toHaveBeenCalledTimes(1);
-      expect(dispatchSpy).toHaveBeenCalledWith('sess-1', 'message.received', { x: 1 });
+      expect(dispatchSpy).toHaveBeenCalledWith('sess-1', 'message.received', { x: 1 }, { engineRef });
       expect(repository.find).not.toHaveBeenCalled(); // the engine, not the facade, loads webhooks
     });
 

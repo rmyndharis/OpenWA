@@ -212,7 +212,14 @@ function installFetchStub(): void {
       (path === '/api/infra/export-data' || path === '/api/infra/export-data?includePluginSecrets=true')
     ) {
       const answer = () =>
-        jsonResponse({ exportedAt: new Date(0).toISOString(), dataDbType: 'postgres', tables: {}, counts: {} });
+        jsonResponse({
+          exportedAt: new Date(0).toISOString(),
+          dataDbType: 'postgres',
+          tables: {},
+          counts: {},
+          skippedTables: [],
+          omittedInlineMedia: { messages: 0, messageBatches: 0 },
+        });
       return overrides.exportGate ? overrides.exportGate.then(answer) : Promise.resolve(answer());
     }
     if (method === 'POST' && path === '/api/infra/import-data') {

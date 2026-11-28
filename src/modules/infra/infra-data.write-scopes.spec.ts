@@ -1,6 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import { DataSource, QueryRunner } from 'typeorm';
 import { InfraDataService } from './infra-data.service';
+import { readExport } from '../../../test/helpers/read-export';
 import type { MigrationTables } from './migration-tables.types';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
@@ -180,7 +181,7 @@ describe('import-data and the writes of the sessions it removes', () => {
       hooks,
       pacing,
     );
-    const dump = await newService().exportData();
+    const dump = await readExport(newService().exportData());
     onlyS2 = { ...dump.tables, sessions: dump.tables.sessions?.filter(row => row.id === 's2') };
   });
 
@@ -264,7 +265,7 @@ describe('import-data and the writes of the sessions it removes', () => {
       progress: { total: 1, sent: 0, failed: 0, pending: 1, cancelled: 0 },
       results: [],
     });
-    const dump = await newService().exportData();
+    const dump = await readExport(newService().exportData());
 
     await expect(
       importNow({ stopOrphans: true }, { ...dump.tables, sessions: dump.tables.sessions?.filter(r => r.id === 's2') }),

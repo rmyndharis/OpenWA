@@ -1,9 +1,9 @@
 import { ConfigService } from '@nestjs/config';
-import { Repository, In, Raw } from 'typeorm';
+import { Repository, In, IsNull, Not, Raw } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { buildMessageMetadata, REVOKED_ROW_PATCH } from './message-row.mapper';
-import { mutationTargetsForeignRowPersisted } from './message-mutation-guard';
+import { judgeStoredRow } from './message-row-judgement';
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import { IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { LoggerService } from '../../common/services/logger.service';
@@ -54,7 +54,16 @@ export async function persistHistoryMessages(
     const chunkIds = ids.slice(i, i + CHUNK);
     const existing = await messageRepository.find({
       where: { sessionId: id, waMessageId: In(chunkIds) },
-      select: { waMessageId: true, type: true, chatId: true, direction: true, author: true },
+      select: {
+        waMessageId: true,
+        type: true,
+        chatId: true,
+        direction: true,
+        author: true,
+        engineRef: true,
+        from: true,
+        to: true,
+      },
     });
     // A delete() can retire the engine while a large batch works through its chunks; its transaction
     // has then already cleared this session's messages, and a row inserted after it (no FK) would
@@ -121,30 +130,25 @@ export async function persistHistoryMessages(
     // Insert the tombstone before clearing an existing row: concurrent content inserts then either
     // lose the unique-key race or are cleared here, and a later chunk cannot resurrect the payload.
     // The row keeps the chat id as its writer gave it (a REST send stores the caller's own dialect), so
-    // the tombstone is matched on the chat it names, not on the string.
+    // the tombstone is matched on the chat it names, not on the string. A row a hook filed under another chat or
+    // side is matched on the engine's, and written under its own.
     const storedChats = new Map(existing.map(r => [r.waMessageId, r]));
     for (const messageId of chunkIds) {
       const m = byId.get(messageId)!;
       if (m.type !== 'revoked') continue;
       const stored = storedChats.get(messageId);
       const storedChat = stored?.chatId ?? m.chatId;
+      const direction = m.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING;
       if (
         stored &&
-        (await mutationTargetsForeignRowPersisted(
-          stored,
-          { kind: 'revoke', chatId: m.chatId, fromMe: m.fromMe },
-          resolveLid,
-        ))
+        ((stored.engineRef ?? stored).direction !== direction ||
+          (await judgeStoredRow(stored, messageId, { kind: 'revoke', chatId: m.chatId, fromMe: m.fromMe }, resolveLid))
+            .reason)
       )
         continue;
       if (!isLive()) break;
       await messageRepository.update(
-        {
-          sessionId: id,
-          waMessageId: messageId,
-          chatId: storedChat,
-          direction: m.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
-        },
+        { sessionId: id, waMessageId: messageId, chatId: storedChat, direction: stored?.direction ?? direction },
         REVOKED_ROW_PATCH,
       );
     }
@@ -154,17 +158,31 @@ export async function persistHistoryMessages(
       const revoked = await messageRepository.find({
         where: { sessionId: id, waMessageId: In(chunkIds), type: 'revoked' },
       });
+      // Read apart, as the rows above go to message:persisted, which never carries them. A live insert may have
+      // landed a moved row since the read of the chunk.
+      const engineRefs = new Map(
+        (
+          await messageRepository.find({
+            where: { sessionId: id, waMessageId: In(chunkIds), type: 'revoked', engineRef: Not(IsNull()) },
+            select: { waMessageId: true, engineRef: true },
+          })
+        ).map(r => [r.waMessageId, r.engineRef]),
+      );
       for (const row of revoked) {
         const m = byId.get(row.waMessageId)!;
         if (!isLive()) break;
         const direction = m.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING;
+        const engineRef = engineRefs.get(row.waMessageId);
         if (
-          (await mutationTargetsForeignRowPersisted(
-            row,
-            { kind: 'revoke', chatId: m.chatId, fromMe: m.fromMe },
-            resolveLid,
-          )) ||
-          row.direction !== direction ||
+          (
+            await judgeStoredRow(
+              { ...row, engineRef },
+              row.waMessageId,
+              { kind: 'revoke', chatId: m.chatId, fromMe: m.fromMe },
+              resolveLid,
+            )
+          ).reason ||
+          (engineRef ?? row).direction !== direction ||
           !Number.isFinite(m.timestamp)
         ) {
           continue;
@@ -176,7 +194,7 @@ export async function persistHistoryMessages(
               sessionId: id,
               waMessageId: m.id,
               chatId: row.chatId,
-              direction,
+              direction: row.direction,
               type: 'revoked',
               timestamp: Raw(alias => `(${alias} IS NULL OR ${alias} > :historyTimestamp)`, {
                 historyTimestamp: m.timestamp,

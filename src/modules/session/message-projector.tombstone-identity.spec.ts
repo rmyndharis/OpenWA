@@ -113,6 +113,8 @@ describe('reported identities before a tombstone delivery reaches its hooks', ()
   });
 
   afterEach(async () => {
+    // A change kept while a write was refused is let go before the database it would be written to closes.
+    projector.forgetSession('s1');
     await db.destroy();
     if (mediaConcurrency === undefined) delete process.env.INBOUND_MEDIA_CONCURRENCY;
     else process.env.INBOUND_MEDIA_CONCURRENCY = mediaConcurrency;

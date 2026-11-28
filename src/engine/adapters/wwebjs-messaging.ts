@@ -18,6 +18,7 @@ import { MessageWithReactions, SerializedWid, readWid } from '../types/whatsapp-
 import { BadRequestException, NotImplementedException } from '@nestjs/common';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import {
   SERIALIZED_MESSAGE_ID,
@@ -565,6 +566,20 @@ export class WwebjsMessaging {
     }
   }
 
+  /**
+   * `result`, naming the id the send was handed (`handedTo`, see sendResolved) when it is not the one the caller
+   * wrote, as the chat the message went to (`engineChatId`) and the one its row is filed under (`resolvedChatId`):
+   * the number WhatsApp holds the recipient under when it holds it under other digits, or the contact's `@lid`
+   * when the lookup answered only that. WhatsApp did not pair the digits written with the lid, and once another
+   * source reports the phone it holds for it, a row under them would be in no thread of the contact. Read from the
+   * send itself, not from the lookup memory, which another send to the same number may have changed since.
+   */
+  private resolvedResult(chatId: string, handedTo: string | undefined, result: MessageResult): MessageResult {
+    if (!handedTo) return result;
+    const engineChatId = toNeutralJid(handedTo);
+    return engineChatId === toNeutralJid(chatId) ? result : { ...result, resolvedChatId: engineChatId, engineChatId };
+  }
+
   private rememberResolvedSendId(chatId: string, wid: string): void {
     this.resolvedSendIds.delete(chatId);
     this.resolvedSendIds.set(chatId, wid);
@@ -602,14 +617,23 @@ export class WwebjsMessaging {
    * `@c.us` and `@lid` rows on a pure whatsapp-web.js deployment (#583 R3). Fire-and-forget: resolution (and
    * the send) must never block/fail on the write. A write the store reports failed (it resolves false, or
    * rejects) is marked for the next send, unless a newer resolution has replaced this one meanwhile.
+   *
+   * WhatsApp said these digits reach the lid, not that they are the phone it holds for it: a lid already reported
+   * with other digits (the number as WhatsApp holds it, by another source) keeps them, so a send to another
+   * spelling does not take the lid's chat away from a key scoped to that number.
    */
   private reportLid(chatId: string, wid: string): void {
+    const store = this.host.config.lidMappingStore;
+    if (!store) return;
     const failed = (): void => {
       if (this.resolvedSendIds.get(chatId) === wid) this.unreportedLids.add(chatId);
     };
-    void this.host.config.lidMappingStore
-      ?.remember(userPart(wid), userPart(chatId), this.host.config.sessionId)
-      ?.then(stored => {
+    const phone = userPart(chatId);
+    void Promise.resolve(store.findPhoneForLid?.(wid))
+      .then(reported =>
+        reported && reported !== phone ? true : store.remember(userPart(wid), phone, this.host.config.sessionId),
+      )
+      .then(stored => {
         if (stored === false) failed();
       }, failed);
   }
@@ -662,6 +686,7 @@ export class WwebjsMessaging {
     chatId: string,
     send: (to: string) => Promise<T>,
     quotedMessageId?: string,
+    handed?: { to?: string },
   ): Promise<T> {
     if (quotedMessageId) ensureSendable(chatId, 'reply');
     const to = await this.resolveSendId(chatId);
@@ -670,6 +695,7 @@ export class WwebjsMessaging {
     // readiness check on getClient never sees, so a send must not leave for a closing page from here.
     this.ensureReadyToSend();
     const since = navigationsSeen(this.host);
+    if (handed) handed.to = to;
     try {
       return await send(to);
     } catch (err) {
@@ -709,6 +735,7 @@ export class WwebjsMessaging {
         freshId: fresh,
       });
       const retrySince = navigationsSeen(this.host);
+      if (handed) handed.to = fresh;
       try {
         return await send(fresh);
       } catch (retryErr) {
@@ -761,6 +788,7 @@ export class WwebjsMessaging {
     if (mentions?.length) sendOptions.mentions = neutralMentions(mentions);
     if (options?.linkPreview === false) sendOptions.linkPreview = false;
 
+    const handed: { to?: string } = {};
     const msg = await this.sendResolved(
       chatId,
       to =>
@@ -768,8 +796,9 @@ export class WwebjsMessaging {
           ? this.client().sendMessage(to, text, sendOptions)
           : this.client().sendMessage(to, text),
       options?.quotedMessageId,
+      handed,
     );
-    return toMessageResult(msg);
+    return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
   }
 
   async sendImageMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
@@ -818,6 +847,7 @@ export class WwebjsMessaging {
     if (extraOptions?.sendMediaAsDocument && !messageMedia.filename) {
       messageMedia.filename = 'file';
     }
+    const handed: { to?: string } = {};
     const msg = await this.sendResolved(
       chatId,
       to =>
@@ -830,12 +860,13 @@ export class WwebjsMessaging {
           ...this.quoteOptions(media.quotedMessageId),
         }),
       media.quotedMessageId,
+      handed,
     ).catch((error: unknown) => {
       noteVideoLoadTimeout(this.host, error, messageMedia.mimetype);
       throw error;
     });
 
-    return toMessageResult(msg);
+    return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
   }
 
   async sendLocationMessage(chatId: string, location: LocationInput): Promise<MessageResult> {
@@ -849,12 +880,14 @@ export class WwebjsMessaging {
       name: location.description || '',
       address: location.address || '',
     });
+    const handed: { to?: string } = {};
     const msg = await this.sendResolved(
       chatId,
       to => this.client().sendMessage(to, loc, this.quoteOptions(location.quotedMessageId)),
       location.quotedMessageId,
+      handed,
     );
-    return toMessageResult(msg);
+    return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
   }
 
   async sendContactMessage(chatId: string, contact: ContactCard): Promise<MessageResult> {
@@ -864,6 +897,7 @@ export class WwebjsMessaging {
     // can't inject extra vCard fields — the previous inline build interpolated raw values.
     const vcard = buildVCard(contact);
 
+    const handed: { to?: string } = {};
     const msg = await this.sendResolved(
       chatId,
       to =>
@@ -872,8 +906,9 @@ export class WwebjsMessaging {
           ...this.quoteOptions(contact.quotedMessageId),
         }),
       contact.quotedMessageId,
+      handed,
     );
-    return toMessageResult(msg);
+    return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
   }
 
   async sendStickerMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
@@ -902,6 +937,7 @@ export class WwebjsMessaging {
     // It exports nothing to run that apart from the send, so a failure of it is told by what it throws. A retry
     // after "No LID for user" follows an attempt that reached the page, so it proves nothing about the message.
     let attempts = 0;
+    const handed: { to?: string } = {};
     const msg = await this.sendResolved(
       chatId,
       to => {
@@ -921,8 +957,9 @@ export class WwebjsMessaging {
           });
       },
       media.quotedMessageId,
+      handed,
     );
-    return toMessageResult(msg);
+    return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
   }
 
   /**
@@ -967,6 +1004,7 @@ export class WwebjsMessaging {
     // allowMultipleAnswers.
     type PollSendOptions = ConstructorParameters<typeof Poll>[2];
     const pollOptions = { allowMultipleAnswers: poll.allowMultipleAnswers === true } as PollSendOptions;
+    const handed: { to?: string } = {};
     const msg = await this.sendResolved(
       chatId,
       to =>
@@ -976,8 +1014,9 @@ export class WwebjsMessaging {
           this.quoteOptions(poll.quotedMessageId),
         ),
       poll.quotedMessageId,
+      handed,
     );
-    return toMessageResult(msg);
+    return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
   }
 
   async replyToMessage(chatId: string, quotedMsgId: string, text: string, mentions?: string[]): Promise<MessageResult> {
@@ -999,12 +1038,17 @@ export class WwebjsMessaging {
       // tags participants exactly as a plain one does. The options argument is omitted entirely when
       // no tags were asked for, keeping an ordinary reply's call shape untouched (same rule as the
       // send path).
-      const msg = await this.sendResolved(chatId, to =>
-        mentions?.length
-          ? quotedMsg.reply(text, to, { mentions: neutralMentions(mentions) })
-          : quotedMsg.reply(text, to),
+      const handed: { to?: string } = {};
+      const msg = await this.sendResolved(
+        chatId,
+        to =>
+          mentions?.length
+            ? quotedMsg.reply(text, to, { mentions: neutralMentions(mentions) })
+            : quotedMsg.reply(text, to),
+        undefined,
+        handed,
       );
-      return toMessageResult(msg);
+      return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
     } catch (error) {
       this.host.reportIfPageTransportError(error, 'replyToMessage');
       throw error;
@@ -1078,7 +1122,7 @@ export class WwebjsMessaging {
           const forwarded = fresh.filter(m => m.isForwarded);
           const sent = fresh.length === 1 ? fresh[0] : forwarded.length === 1 ? forwarded[0] : undefined;
           if (sent) {
-            return toMessageResult(sent);
+            return this.resolvedResult(toChatId, resolvedTo, toMessageResult(sent));
           }
         }
       } catch (error) {
@@ -1087,7 +1131,7 @@ export class WwebjsMessaging {
         this.host.reportIfPageTransportError(error, 'forwardMessage');
         this.host.logger.warn(`Forward succeeded but recovering the sent message id failed: ${String(error)}`);
       }
-      return { id: '', timestamp: Math.floor(Date.now() / 1000) };
+      return this.resolvedResult(toChatId, resolvedTo, { id: '', timestamp: Math.floor(Date.now() / 1000) });
     } catch (error) {
       this.host.reportIfPageTransportError(error, 'forwardMessage');
       throw error;
@@ -1299,7 +1343,7 @@ export class WwebjsMessaging {
         } catch (error) {
           if (this.host.isPageTransportError(error)) {
             this.host.reportIfPageTransportError(error, 'getChatHistory');
-            break;
+            throw new EngineTransportError('Transport died during getChatHistory');
           }
           this.host.logger.warn(
             `Failed to resolve contact for history message ${msg.id._serialized}: ${String(error)}`,
@@ -1331,7 +1375,7 @@ export class WwebjsMessaging {
         } catch (error) {
           if (this.host.isPageTransportError(error)) {
             this.host.reportIfPageTransportError(error, 'getChatHistory');
-            break;
+            throw new EngineTransportError('Transport died during getChatHistory');
           }
           this.host.logger.warn(`Failed to resolve quoted message for ${msg.id._serialized}: ${String(error)}`);
         }
@@ -1354,7 +1398,7 @@ export class WwebjsMessaging {
           } catch (error) {
             if (this.host.isPageTransportError(error)) {
               this.host.reportIfPageTransportError(error, 'getChatHistory');
-              break;
+              throw new EngineTransportError('Transport died during getChatHistory');
             }
             this.host.logger.warn(`Failed to download media for ${msg.id._serialized}: ${String(error)}`);
           }
@@ -1365,13 +1409,18 @@ export class WwebjsMessaging {
     return results;
   }
 
-  async deleteMessage(chatId: string, messageId: string, forEveryone: boolean = true): Promise<string | void> {
+  async deleteMessage(
+    chatId: string,
+    messageId: string,
+    forEveryone: boolean = true,
+  ): Promise<{ id?: string; engineChatId: string }> {
     this.host.ensureReady();
     // NOTE: do NOT resolve chatId to @lid here — delete operates on the found message's own key, not
     // this chatId, so LID-resolving the lookup gives no benefit and would miss a message stored under
     // the pre-migration @c.us chat (#583).
     // The message is found by its serialized id or by the bare key id, but its row is keyed by the serialized one,
-    // which is what the caller needs to clear the stored copy.
+    // which is what the caller needs to clear the stored copy, with the chat it is stored under (as the inbound
+    // mapper derives it).
     const deleted = await withPageWrite(this.host, 'deleteMessage', async () => {
       const chat = await this.client()
         .getChatById(chatId)
@@ -1386,7 +1435,7 @@ export class WwebjsMessaging {
       }
       this.host.ensureReady();
       await message.delete(forEveryone);
-      return readWid(message.id);
+      return { id: readWid(message.id), engineChatId: message.fromMe ? message.to : message.from };
     });
     this.host.logger.debug('Deleted message', { chatId, messageId, forEveryone });
     return deleted;
@@ -1413,9 +1462,12 @@ export class WwebjsMessaging {
       this.host.ensureReady();
       // An edit REPLACES the content, so tags are re-applied rather than preserved: omitting mentions
       // drops whatever the original carried. Options omitted entirely when none were asked for.
-      return mentions?.length ? message.edit(body, { mentions: neutralMentions(mentions) }) : message.edit(body);
+      const result = await (mentions?.length
+        ? message.edit(body, { mentions: neutralMentions(mentions) })
+        : message.edit(body));
+      return { result, engineChatId: message.fromMe ? message.to : message.from };
     });
-    if (!edited) {
+    if (!edited.result) {
       // wwebjs RESOLVES null (instead of throwing) when the page-side edit is refused — only the
       // account's own text messages are editable; surface the refusal, not a phantom success.
       throw new EngineRefusedError(
@@ -1423,7 +1475,7 @@ export class WwebjsMessaging {
       );
     }
     this.host.logger.debug('Edited message', { chatId, messageId });
-    return toMessageResult(edited);
+    return { ...toMessageResult(edited.result), engineChatId: edited.engineChatId };
   }
 
   /**

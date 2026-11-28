@@ -30,9 +30,19 @@ import { SessionWriteScope } from '../../common/utils/session-write-scope';
 // TypeScript does not check, so `implements` is what keeps the two in step.
 import type { PluginMessagePort } from '../../core/plugins/plugin-host-ports';
 import { MessageWindow, messageTimeBoundarySeconds, validateMessageWindow } from './message-window';
+import { engineChatOf } from './engine-chat-of';
 
 // Re-exported for existing importers (bulk send shares the rendered-template cap with the send path).
 export { DEFAULT_TEMPLATE_RENDER_MAX_CHARS } from './message-send.service';
+
+/**
+ * What a delete or edit through the API says of the message it changed, for its stored row: the chat the engine
+ * found it in and, when the engine reports one, the chat its caller named, which the engine accepted for the
+ * message too. The engine may keep the message under another form of the caller's chat: Baileys keeps a received
+ * broadcast-list message, deleted by its list id, with its sender, and a contact named by phone number under its lid.
+ */
+const apiChangeSource = <K extends 'revoke' | 'edit'>(kind: K, callerChatId: string, engineChatId?: string) =>
+  engineChatId ? { kind, chatId: engineChatId, callerChatId } : { kind, chatId: callerChatId };
 
 export interface GetMessagesOptions extends MessageWindow {
   chatId?: string;
@@ -609,7 +619,14 @@ export class MessageService implements PluginMessagePort {
 
   async reactToMessage(sessionId: string, dto: { chatId: string; messageId: string; emoji: string }): Promise<void> {
     const engine = this.getEngine(sessionId);
-    await engine.reactToMessage(dto.chatId, dto.messageId, dto.emoji);
+    await engine.reactToMessage(await this.engineChatOf(sessionId, dto), dto.messageId, dto.emoji);
+  }
+
+  /** The chat the engine acts on the message in (see engineChatOf). */
+  private engineChatOf(sessionId: string, dto: { chatId: string; messageId: string }): Promise<string> {
+    return engineChatOf(this.messageRepository, sessionId, dto.chatId, dto.messageId, id =>
+      this.resolveJidCandidates(id),
+    );
   }
 
   async getMessageReactions(sessionId: string, chatId: string, messageId: string) {
@@ -813,13 +830,17 @@ export class MessageService implements PluginMessagePort {
    */
   async pinMessage(sessionId: string, dto: { chatId: string; messageId: string; durationSeconds?: number }) {
     const engine = this.getEngine(sessionId);
-    await engine.pinMessage(dto.chatId, dto.messageId, dto.durationSeconds ?? DEFAULT_PIN_DURATION_SECONDS);
+    await engine.pinMessage(
+      await this.engineChatOf(sessionId, dto),
+      dto.messageId,
+      dto.durationSeconds ?? DEFAULT_PIN_DURATION_SECONDS,
+    );
     return { success: true };
   }
 
   async unpinMessage(sessionId: string, dto: { chatId: string; messageId: string }) {
     const engine = this.getEngine(sessionId);
-    await engine.unpinMessage(dto.chatId, dto.messageId);
+    await engine.unpinMessage(await this.engineChatOf(sessionId, dto), dto.messageId);
     return { success: true };
   }
 
@@ -833,7 +854,7 @@ export class MessageService implements PluginMessagePort {
    */
   async starMessage(sessionId: string, dto: { chatId: string; messageId: string; star: boolean }) {
     const engine = this.getEngine(sessionId);
-    await engine.starMessage(dto.chatId, dto.messageId, dto.star);
+    await engine.starMessage(await this.engineChatOf(sessionId, dto), dto.messageId, dto.star);
     return { success: true };
   }
 
@@ -852,7 +873,13 @@ export class MessageService implements PluginMessagePort {
     dto: { chatId: string; messageId: string; forEveryone?: boolean },
   ): Promise<void> {
     const engine = this.getEngine(sessionId);
-    const deleted = await engine.deleteMessage(dto.chatId, dto.messageId, dto.forEveryone ?? true);
+    const result = await engine.deleteMessage(
+      await this.engineChatOf(sessionId, dto),
+      dto.messageId,
+      dto.forEveryone ?? true,
+    );
+    // An engine plugin written before the chat was reported resolves the id alone.
+    const { id: deleted, engineChatId } = typeof result === 'string' ? { id: result } : (result ?? {});
 
     // Clear the stored message the same way an engine revoke does (body, media and metadata), on
     // its mutation chain. Best-effort: never rejects. No localized display string is persisted
@@ -861,7 +888,7 @@ export class MessageService implements PluginMessagePort {
     // Under the id the caller named (Baileys keys its rows by it, and so does a row an earlier engine stored) and,
     // when the engine found the message under another form of that id, under the one it keys it by: whatsapp-web.js
     // also takes the bare key id of a message it stores under the serialized id.
-    const source = { kind: 'revoke', chatId: dto.chatId } as const;
+    const source = apiChangeSource('revoke', dto.chatId, engineChatId);
     await this.messageProjector.recordRevoke(sessionId, dto.messageId, source);
     if (typeof deleted === 'string' && deleted && deleted !== dto.messageId) {
       await this.messageProjector.recordRevoke(sessionId, deleted, source);
@@ -879,16 +906,16 @@ export class MessageService implements PluginMessagePort {
     // through the same moderation chokepoint as every other sender. A plugin can rewrite `body`
     // here exactly as it can for a first send.
     const finalDto = await this.applySendingGate(sessionId, 'edit', dto);
+    const chatId = await this.engineChatOf(sessionId, finalDto);
     const result = finalDto.mentions?.length
-      ? await engine.editMessage(finalDto.chatId, finalDto.messageId, finalDto.body, finalDto.mentions)
-      : await engine.editMessage(finalDto.chatId, finalDto.messageId, finalDto.body);
+      ? await engine.editMessage(chatId, finalDto.messageId, finalDto.body, finalDto.mentions)
+      : await engine.editMessage(chatId, finalDto.messageId, finalDto.body);
 
     // Best-effort: reflect the new body in the stored copy (mirrors deleteMessage's revoked flag),
     // serialized with the inbound edit/reaction writers through the session's per-message mutation
     // queue. A missing row must not fail the request — the engine edit already succeeded.
     await this.messageProjector.recordOutboundMessageEdit(sessionId, finalDto.messageId, finalDto.body, {
-      kind: 'edit',
-      chatId: finalDto.chatId,
+      ...apiChangeSource('edit', finalDto.chatId, result.engineChatId),
       fromMe: true,
     });
     return { messageId: result.id, timestamp: result.timestamp };

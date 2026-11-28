@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { ChatStateStoreService, mergeTwinStates } from './baileys-chat-state-store.service';
 import { ChatState } from './baileys-chat-state.entity';
 import { BaileysSessionStore } from './baileys-session-store';
@@ -53,11 +53,19 @@ function makeRepo(initial: Partial<ChatState>[] = []) {
       };
       return qb;
     }),
-    delete: jest.fn(({ sessionId, chatId }: { sessionId: string; chatId?: string }) => {
-      for (const [k, r] of rows)
-        if (r.sessionId === sessionId && (chatId === undefined || r.chatId === chatId)) rows.delete(k);
-      return Promise.resolve(undefined);
-    }),
+    delete: jest.fn(
+      ({ sessionId, chatId, updatedAt }: { sessionId: string; chatId?: string; updatedAt?: { value: Date } }) => {
+        for (const [k, r] of rows)
+          if (
+            r.sessionId === sessionId &&
+            (chatId === undefined || r.chatId === chatId) &&
+            // Only the LessThanOrEqual an unlink cleared later passes: rows written since stay.
+            (updatedAt === undefined || r.updatedAt.getTime() <= updatedAt.value.getTime())
+          )
+            rows.delete(k);
+        return Promise.resolve(undefined);
+      },
+    ),
   };
   return repo;
 }
@@ -92,6 +100,33 @@ describe('ChatStateStoreService', () => {
     expect([...repo.rows.values()].map(r => r.sessionId)).toEqual(['t']);
     expect(svc.get('s', 'c')).toBeUndefined();
     expect(svc.get('t', 'c')).toMatchObject({ muteEndTime: null, archived: false, pinned: true });
+  });
+
+  it('clearSession up to a time leaves the rows written after it, for an unlink cleared once the database answers', async () => {
+    const repo = makeRepo([
+      { sessionId: 's', chatId: 'old', pinned: true, updatedAt: new Date(1000) },
+      { sessionId: 's', chatId: 'new', archived: true, updatedAt: new Date(3000) },
+    ]);
+    const svc = svcWith(repo);
+
+    await svc.clearSession('s', new Date(2000));
+
+    expect([...repo.rows.values()].map(r => r.chatId)).toEqual(['new']);
+  });
+
+  it('clearSession drops the cached states of the session even when the table refuses the delete', async () => {
+    const repo = makeRepo([{ sessionId: 's', chatId: 'c', pinned: true }]);
+    const svc = svcWith(repo);
+    await svc.reload();
+    repo.delete.mockRejectedValueOnce(Object.assign(new Error('Connection terminated'), { code: 'ECONNREFUSED' }));
+
+    await expect(svc.clearSession('s', new Date())).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+
+    expect(svc.get('s', 'c')).toBeUndefined();
+    // Nor read back from the row the delete left, until the delete runs again.
+    for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));
+    await svc.reload();
+    expect(svc.get('s', 'c')).toBeUndefined();
   });
 
   describe('reports when each state last changed', () => {
@@ -960,5 +995,44 @@ describe('ChatStateStoreService', () => {
       releaseWrite();
       await activeWrite;
     });
+  });
+});
+
+// A backup reads the table raw: SQLite hands back the UTC text it stores, with no zone in it. Read in the host's zone, a
+// stamp moves by the zone's offset, which a host in UTC cannot see, so the stamp is also held to the ORM's reading.
+describe('ChatStateStoreService rows read raw while an unlinked account is hidden', () => {
+  let db: DataSource;
+
+  beforeEach(async () => {
+    db = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [ChatState], synchronize: true });
+    await db.initialize();
+  });
+
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    await db.destroy();
+  });
+
+  it('hides a raw row up to the unlink, its stamp read as the ORM reads its own rows', async () => {
+    const repo = db.getRepository(ChatState);
+    const unlinkedAt = new Date('2026-11-28T00:00:00.000Z');
+    for (const [chatId, offset] of [
+      ['old@c.us', -60_000],
+      ['new@c.us', 60_000],
+    ] as const) {
+      await repo.insert({ sessionId: 's', chatId, pinned: true, updatedAt: new Date(unlinkedAt.getTime() + offset) });
+    }
+    const states = new ChatStateStoreService(repo);
+    states.hideUpTo('s', unlinkedAt);
+    const raw = await db.query<Array<Record<string, unknown>>>('SELECT * FROM "chat_states" ORDER BY "chatId"');
+    const hydrate = jest.spyOn(db.driver, 'prepareHydratedValue');
+
+    expect(raw.map(row => [row.chatId, states.hidesRaw(row)])).toEqual([
+      ['new@c.us', false],
+      ['old@c.us', true],
+    ]);
+    expect(hydrate.mock.calls.map(([value, column]) => [value as unknown, column.propertyName])).toEqual(
+      raw.map(row => [row.updatedAt, 'updatedAt']),
+    );
   });
 });

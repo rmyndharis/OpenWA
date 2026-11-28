@@ -124,13 +124,14 @@ log() { echo "[backup] $*"; }
 # read-only, so the default ./backups (/app/backups) cannot be created there; failing only at the
 # end would first copy every database, session and media file into the staging directory.
 if ! mkdir -p "$BACKUP_DIR" 2>/dev/null || [ ! -w "$BACKUP_DIR" ]; then
-  log "ERROR: BACKUP_DIR=$BACKUP_DIR is not writable; point BACKUP_DIR at a writable, persistent directory (inside the container use BACKUP_DIR=/app/data/backups, and under docker compose also TMPDIR=/app/data/backups: its /tmp is a tmpfs charged to the container's memory)"
+  log "ERROR: BACKUP_DIR=$BACKUP_DIR is not writable; point BACKUP_DIR at a writable, persistent directory (inside the container use BACKUP_DIR=/app/data/backups and also TMPDIR=/app/data/backups: under docker compose /tmp is a tmpfs charged to the container's memory, and the Helm chart caps it at tmpVolumeSizeLimit)"
   exit 1
 fi
 
 # The staging copy goes to TMPDIR. Under docker compose that is a tmpfs charged to the container's
-# memory limit, so an in-container run there points TMPDIR at the data volume (docs/11); staging the
-# data in the tmpfs gets the running gateway OOM-killed once the data outgrows its headroom.
+# memory limit, and the Helm chart caps its /tmp emptyDir (the kubelet evicts the pod past it), so an
+# in-container run points TMPDIR at the data volume (docs/11); staging the data in the tmpfs gets the
+# running gateway OOM-killed once the data outgrows its headroom.
 STAGE="$(mktemp -d)"
 # The archive is written under a name no restore, listing or retention glob matches and renamed once the
 # min-content check passes: a tar that fails part way (the volume fills) must not leave a truncated

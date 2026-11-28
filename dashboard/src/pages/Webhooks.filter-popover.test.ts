@@ -97,3 +97,28 @@ test('an Escape that ends an IME composition leaves the filter popover open', as
   rtl.fireEvent.keyDown(document.body, { key: 'Escape', keyCode: 229 });
   assert.ok(popoverShown(), 'an Escape the input method processed closed the popover');
 });
+
+// The pointer opens the popover outside any act() scope, as a real hover does: an Escape pressed the moment the
+// popover is inserted must reach it.
+test('an Escape pressed the moment the pointer opens the filter popover closes it', async () => {
+  const badge = await renderBadge();
+  const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+  const pressed = new Promise<void>(resolve => {
+    const observer = new MutationObserver(() => {
+      if (!popoverShown()) return;
+      observer.disconnect();
+      document.body.dispatchEvent(escape);
+      resolve();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+  const warn = console.error;
+  console.error = () => undefined;
+  try {
+    badge.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
+    await pressed;
+  } finally {
+    console.error = warn;
+  }
+  assert.ok(escape.defaultPrevented, 'the Escape pressed as the popover appeared was lost');
+});

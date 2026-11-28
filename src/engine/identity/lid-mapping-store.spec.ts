@@ -4129,6 +4129,61 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
   });
 
   // The table still names the phone a failed write was to replace. The cap's eviction and a reload are no reason to answer it.
+  // A query that judges rows in the table binds what the store refuses of them: it must name the lid's row whenever the
+  // store answers no phone for it, and no row the store answers.
+  describe('the reported rows it lists as refused', () => {
+    /** Whether `vetoes` refuse the reported row of `lid` naming `phone`, as the query that binds them does. */
+    const refuses = (lid: string, phone: string): boolean => {
+      const { unreported, revoking, held } = store.rowVetoes();
+      return (
+        unreported.includes(lid) ||
+        revoking.includes(lid) ||
+        held.some(([heldLid, heldPhone]) => heldLid === lid && heldPhone !== phone)
+      );
+    };
+    /** The listed refusals agree with what the store answers for lid 333's row. */
+    const agree = async (): Promise<void> => {
+      const row = await repo.findOneByOrFail({ lid: '333' });
+      const answered = await store.findPhoneForLid('333@lid');
+      expect(refuses('333', row.phone!)).toBe(row.isReported && answered === null);
+    };
+
+    it('lists none while every write has settled', async () => {
+      expect(store.rowVetoes()).toEqual({ unreported: [], revoking: [], held: [] });
+      await agree();
+    });
+
+    it.each([
+      ['a re-map to another phone', 'upsert', () => store.remember('333', '628222', OWNER)],
+      ['a revocation by a display lookup', 'update', () => store.rememberIfUnknown('333', '628222', OTHER)],
+    ] as const)('lists the row while %s is being written, and not once it landed', async (_write, method, start) => {
+      const held = hold(method);
+      const writing = start();
+      await held.reached;
+
+      expect(refuses('333', '628111')).toBe(true);
+      expect(refuses('333', '628222')).toBe(method === 'update');
+      await agree();
+
+      held.release();
+      await writing;
+      expect(store.rowVetoes()).toEqual({ unreported: [], revoking: [], held: [] });
+      await agree();
+    });
+
+    it.each([
+      ['a re-map to another phone', 'upsert', () => store.remember('333', '628222', OWNER)],
+      ['a revocation by a display lookup', 'update', () => store.rememberIfUnknown('333', '628222', OTHER)],
+    ] as const)('lists the row once %s failed', async (_write, method, start) => {
+      jest.spyOn(repo, method).mockRejectedValueOnce(new Error('connection lost'));
+      await expect(start()).resolves.toBe(false);
+      warn.mockClear();
+
+      expect(refuses('333', '628111')).toBe(true);
+      await agree();
+    });
+  });
+
   describe('when its write failed and the mirror entry then left', () => {
     const failReport = async (): Promise<void> => {
       jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));

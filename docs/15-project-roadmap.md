@@ -748,7 +748,8 @@ git push origin v<version>
 ```
 
 The tag must be annotated and `v`-prefixed; `release.yml` triggers on `v*` and refuses to proceed if
-the tag string and `package.json` disagree.
+the tag string and `package.json` disagree. Its `lint` job also refuses a tag whose commit `main` does not
+hold, so a tag pushed on an unmerged branch publishes nothing.
 
 Release runs share one concurrency group, which holds the running release and at most one pending run.
 A tag pushed while one release runs and another waits cancels the waiting one, so push the next tag
@@ -765,7 +766,7 @@ flowchart TB
     T --> D
     D --> E[boot-smoke: run the image on amd64 + arm64]
     D --> F[image-scan: Trivy, CRITICAL/HIGH, fixable only]
-    D --> R[release-tags: drop X.Y and latest when a newer release holds them]
+    D --> R[release-tags: drop X.Y and latest when a newer release holds them, and refuse an exact tag that serves another digest]
     E --> G[promote: apply X.Y.Z, X.Y, latest to GHCR + Docker Hub]
     F --> G
     R --> G
@@ -785,7 +786,9 @@ mutable `X.Y` and `latest` channels and is flagged prerelease on GitHub.
 
 For a stable tag, `release-tags` reads which release `X.Y` and `latest` serve on each registry and leaves
 a channel alone when it already serves a newer one, so releasing a patch to an older line or re-running an
-old tag never moves a channel backwards; the exact `X.Y.Z` tag is still applied. A channel it cannot read
+old tag never moves a channel backwards. The exact `X.Y.Z` tag, a prerelease's included, is applied only where
+it is absent or already serves the digest this run built, so a second full run of a published version fails
+before promotion while **Re-run failed jobs**, which keeps the build, still finishes. A channel or tag it cannot read
 fails the release rather than counting as absent; only the registry's own "manifest unknown" answer does.
 `verify-published` then expects only the tags `release-tags` selected. `release-tags` also decides whether
 the GitHub Release is marked Latest: only when this release took every `latest` channel, never for a

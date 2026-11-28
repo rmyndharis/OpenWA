@@ -280,9 +280,11 @@ Four tables live on the data connection, each created by a hand-authored dual-di
 Persist-before-acknowledge; best-effort de-duplication keyed by a stable provider delivery id and queue
 job id; per-instance fairness via a token bucket; and a dead-letter record with bounded redrive. On the
 queued worker path, an **in-process** per-conversation lock prevents concurrent starts for the same lane;
-strict FIFO is not preserved across retry/redrive, and the lock is single-node state rather than Redis or
-PostgreSQL state. When the queue is disabled, ingress dispatches inline after persisting and does not
-serialize concurrent same-conversation deliveries. A queued delivery falls back to the same inline
+strict FIFO is not preserved across retry/redrive, nor on a busy key: a delivery whose key is already
+running goes back to the delayed set for 250 ms, so another delivery for that key arriving in between can
+run first. The lock is single-node state rather than Redis or PostgreSQL state. When the queue is
+disabled, ingress dispatches inline after persisting and does not serialize concurrent same-conversation
+deliveries. A queued delivery falls back to the same inline
 dispatch when Redis is unreachable. Before Redis has ever connected, queue calls wait for it at most
 `REDIS_CONNECT_TIMEOUT_MS` (5s when unset or 0) from the first one, then fall back at once until it
 connects. Providers already deliver over unordered, at-least-once HTTP, so plugin handlers must be
@@ -291,7 +293,7 @@ idempotent and treat ingress as a reconciliation trigger.
 An inline plugin webhook handler has **5 s** (`INGRESS_DISPATCH_TIMEOUT_MS`, fixed, not a setting) to finish. Queued dispatch gets `SIMULATE_TYPING_MAX_MS` plus 5 s, capped at 25 s (10 s by default), below the default 30 s BullMQ lock. The host cannot cancel a
 handler that overruns it: the attempt is recorded as failed, the conversation lock is released and the
 delivery is retried (queued) or dead-lettered (inline), while the first run goes on and its work still
-lands. A handler that calls a slow upstream, or sends media, can therefore run twice for one delivery.
+lands. A handler that calls a slow upstream, or sends media, can therefore run twice for one delivery. A `ctx` call the overrunning run is still awaiting when the budget runs out rejects with a thrown `Error`, though a send it started may still be delivered, and a call it makes after that is refused.
 Key every side effect on the delivery id (`req.deliveryId`) and hand work that can outlast the budget to
 a background task instead of awaiting it in the handler. Even a plain text send may wait up to `SIMULATE_TYPING_MAX_MS` (5 s by default) for typing simulation before contacting the engine. Do not await message sends in hooks or webhook handlers: start the promise with a `.catch` handler and return promptly. Without the queue (`QUEUE_ENABLED` unset or false)
 every dispatch keeps the 5 s inline budget. A live delivery answers the provider only after the inline dispatch,
@@ -375,13 +377,22 @@ the completed job left Redis (`removeOnComplete` keeps one for an hour or the la
 sweep saw it, and a job removed in the queue dashboard is added again until the replay budget is
 spent. A Redis you run yourself should keep its keys: `maxmemory-policy noeviction`, and persistence
 (`appendonly yes`), so a restart does not begin with an empty queue; the bundled container and
-`docker-compose.yml` set both. With the queue off, the reconciler cannot ask Redis about a job, so it replays a
+`docker-compose.yml` set both, plus a `maxmemory` of half the container's memory limit, so a full Redis
+refuses new jobs (and the gateway dispatches inline) instead of being OOM-killed. BullMQ applies the `removeOnComplete` and `removeOnFail` ages only when another job finishes, which a full Redis never lets happen, so the
+gateway also removes finished jobs past their age every five minutes. With the queue off, the reconciler cannot ask Redis about a job, so it replays a
 `pending` row inline whatever Redis still holds, and a job left in `ingress-queue` runs again when the queue is
 turned back on: a second delivery of the same event. Before turning the queue off, wait until `ingress-queue` has
 no waiting, delayed or active jobs (the commands are in [14](./14-migration-guide.md), BullMQ Migration). A
-redrive marks its dead letter redriven as soon as the replay job is queued, so a replay job that Redis then loses
-is not found by the reconciler: the dead-letter row keeps its payload until `INGRESS_RETENTION_DAYS` prunes it,
-so reset `redriven` on the row or send the delivery again.
+redrive takes its dead letter (`claimedAt`), and marks the delivery's pending event dispatched, before it dispatches
+the replay, and retires the row once the replay is queued or delivered; a replay that fails puts both back. The
+reconciler does not replay the marked event and another redrive leaves a taken row alone, so neither sends the
+delivery again while the redrive runs. A take that is never settled is taken again by a redrive once it is five
+minutes old, and the row counts in `remaining` until then: its node stopped before or during the dispatch, or the
+database refused the write that puts back a failed replay (logged as `ingress_redrive_put_back_failed` with both ids)
+or that retires one that went out (`ingress_redrive_retire_failed`). The handler can then receive the delivery twice
+(`ingress_redrive_claim_expired` is logged when it is taken again), under the same `req.deliveryId` it keys its side
+effects on. A replay job that Redis then loses is not found by the reconciler: the dead-letter row keeps its payload
+until `INGRESS_RETENTION_DAYS` prunes it, so reset `redriven` on the row or send the delivery again.
 
 **Plugin restore window.** The gateway opens its port before a slow plugin restore has finished (see
 [19](./19-plugin-architecture.md), Restore on boot), so a delivery can arrive for a plugin that has no

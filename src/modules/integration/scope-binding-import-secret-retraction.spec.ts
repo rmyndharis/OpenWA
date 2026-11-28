@@ -4,6 +4,7 @@ import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { AutomationRule } from '../automation/entities/automation-rule.entity';
 import { InfraDataController } from '../infra/infra-data.controller';
 import { InfraDataService } from '../infra/infra-data.service';
+import { readExport } from '../../../test/helpers/read-export';
 import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
 import { ChatState } from '../../engine/adapters/baileys-chat-state.entity';
 import { LidMapping } from '../../engine/identity/lid-mapping.entity';
@@ -105,7 +106,7 @@ describe('Post-import scope-binding resync retracts secrets of retired or rolled
       );
 
       const cfg = { get: (key: string, def?: unknown) => (key === 'dataDatabase.type' ? 'sqlite' : def) };
-      const dump = await new InfraDataController(new InfraDataService(cfg as never, ds)).exportData();
+      const dump = await new InfraDataController(new InfraDataService(cfg as never, ds)).exportData().then(readExport);
       // Restore an archive from before the wildcard instance existed.
       const tables = {
         ...dump.tables,

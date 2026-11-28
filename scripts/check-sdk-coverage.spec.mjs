@@ -58,6 +58,7 @@ function withCopy(fn) {
     for (const path of [
       'scripts/check-sdk-coverage.mjs',
       'scripts/check-contract-shapes.mjs',
+      'scripts/sdk-query-parameter-gaps.json',
       'openapi.json',
       'sdk/README.md',
       'sdk/javascript/src',
@@ -571,5 +572,91 @@ test('nested control-flow blocks, try/finally after return, and Java Object reco
     assert.match(result.stderr, /GET \/api\/sessions\/\*\/catalog\/finally-stale: built by java/);
     assert.match(result.stderr, /POST \/api\/sessions\/\*\/record-param-stale: built by java/);
     restore();
+  });
+});
+
+/** Assert one exact line of the gate's report, quoting the whole report on failure. */
+const reports = (result, line) => assert.ok(result.stderr.includes(`  - ${line}\n`), result.stdout + result.stderr);
+const MESSAGES = 'GET /api/sessions/{sessionId}/messages';
+const GAPS = 'scripts/sdk-query-parameter-gaps.json';
+
+test('a query parameter the contract renames fails every client that still sends the old key', () => {
+  // Renaming `after` to `cursor` left every client sending `after`, which the server would ignore, so a keyset
+  // page walk re-read its first page forever while the path and verb checks stayed green.
+  withCopy(({ edit, run }) => {
+    edit('openapi.json', '"name": "after"', '"name": "cursor"');
+    const result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    for (const sdk of ['javascript', 'python', 'java', 'go']) {
+      reports(result, `${MESSAGES} query "cursor": declared by the contract, sent by no ${sdk} call`);
+      reports(result, `${MESSAGES} query "after": sent by ${sdk}, not declared by the contract`);
+    }
+    // PHP forwards its caller's array, so it sends whatever the contract names and has nothing to rename.
+    assert.doesNotMatch(result.stdout + result.stderr, /sent by (?:no )?php/);
+  });
+});
+
+test('a query parameter one client stops sending fails that client', () => {
+  withCopy(({ edit, run }) => {
+    let restore = edit('sdk/go/types_message.go', '\tsetStr(v, "after", q.After)\n', '');
+    let result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    reports(result, `${MESSAGES} query "after": declared by the contract, sent by no go call`);
+    restore();
+
+    restore = edit('sdk/javascript/src/types.ts', '  after?: string;\n', '');
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    reports(result, `${MESSAGES} query "after": declared by the contract, sent by no javascript call`);
+    restore();
+
+    // A literal query map is read in both directions.
+    edit('sdk/php/src/Resources/GroupsResource.php', "['code' => $code]", "['invite' => $code]");
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    const joinInfo = 'GET /api/sessions/{sessionId}/groups/join-info';
+    reports(result, `${joinInfo} query "code": declared by the contract, sent by no php call`);
+    reports(result, `${joinInfo} query "invite": sent by php, not declared by the contract`);
+  });
+});
+
+test('a PHP list method that stops forwarding its caller array fails like a dropped parameter', () => {
+  withCopy(({ edit, run }) => {
+    edit(
+      'sdk/php/src/Resources/MessagesResource.php',
+      '/messages", $query)\n            ?? [\'messages\'',
+      '/messages", [])\n            ?? [\'messages\'',
+    );
+    const result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    reports(result, `${MESSAGES} query "after": declared by the contract, sent by no php call`);
+  });
+});
+
+// Both are correct code that sends the same keys: reading the wrapper's name found no type, and every
+// parameter was reported unsent.
+test('a query type behind a wrapper is read through it', () => {
+  withCopy(({ edit, run }) => {
+    edit(
+      'sdk/python/openwa/resources/messages.py',
+      'query: ListMessagesQuery | None = None) -> MessageListResponse:',
+      'query: Optional[ListMessagesQuery] = None) -> MessageListResponse:',
+    );
+    edit(
+      'sdk/javascript/src/resources/messages.ts',
+      'query?: ListMessagesQuery): Promise<MessageListResponse>',
+      'query?: Readonly<ListMessagesQuery>): Promise<MessageListResponse>',
+    );
+    const result = run();
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  });
+});
+
+test('a listed query gap that a client now sends fails until the entry is removed', () => {
+  withCopy(({ edit, run }) => {
+    edit(GAPS, '[]', `[{"sdk":"go","method":"GET","path":"/api/sessions/{sessionId}/messages","parameter":"after"}]`);
+    const result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    reports(result, `${MESSAGES} query "after": listed as missing from go in ${GAPS}, but it is not: remove the entry`);
   });
 });

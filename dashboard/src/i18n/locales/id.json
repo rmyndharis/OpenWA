@@ -389,6 +389,7 @@
     "connecting": "Menghubungkan...",
     "invalidKey": "Kunci API tidak valid",
     "connectionError": "Tidak dapat terhubung ke server. Silakan coba lagi.",
+    "sessionNotKept": "Kunci diterima, tetapi browser ini tidak menyimpan cookie sesi. Dasbor dan API harus berada di situs yang sama, atau disajikan dari origin yang sama.",
     "help": "Butuh bantuan?",
     "viewDocs": "Lihat Dokumentasi",
     "footer": "Dibuat dengan ❤️ oleh Yudhi Armyndharis dan Komunitas OpenWA",
@@ -1280,11 +1281,13 @@
       "exportFailed": "Gagal mengekspor data",
       "exportPartialTitle": "Cadangan kehilangan beberapa media",
       "exportPartial": "{{count}} payload lampiran melebihi anggaran media ekspor dan disimpan sebagai placeholder. Pesan dipulihkan; medianya tidak.",
+      "exportIncomplete": "Unduhan berakhir sebelum cadangan lengkap, sehingga tidak ada yang disimpan. Coba lagi.",
       "importFailed": "Gagal mengimpor data",
       "importOk": "Data diimpor",
       "importConfirm": "Mengimpor akan MENGGANTI semua data saat ini dengan cadangan ({{rows}} baris). Ini tidak dapat dibatalkan. Lanjutkan?",
       "invalidFile": "Berkas tersebut bukan cadangan data OpenWA yang valid.",
-      "importTooLarge": "Cadangan terlalu besar untuk batas permintaan. Tingkatkan BODY_SIZE_LIMIT di server dan coba lagi."
+      "importTooLarge": "Cadangan terlalu besar untuk batas permintaan. Tingkatkan BODY_SIZE_LIMIT di server dan coba lagi.",
+      "importStopped": "Server berhenti saat impor berjalan dan membatalkannya, jadi data Anda tidak berubah. Impor berkas yang sama lagi setelah server kembali aktif."
     },
     "restart": {
       "idleTitle": "Konfigurasi disimpan",

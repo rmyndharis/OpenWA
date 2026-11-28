@@ -5,9 +5,12 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { LoggerService } from '../../../common/services/logger.service';
+import { provesNothingSent } from '../../../common/errors/engine-not-sent.error';
 import {
   CLAIMABLE_SESSION_ID_MAX_LENGTH,
   claimIdempotentSend,
+  handOverSend,
+  isHandOverRefusal,
   runClaimedSend,
   runIdempotentSend,
 } from './run-idempotent-send';
@@ -139,5 +142,58 @@ describe('claimIdempotentSend and runClaimedSend', () => {
 
     await expect(runClaimedSend(store, 'row-9', () => Promise.resolve('sent'))).resolves.toBe('sent');
     expect(complete).toHaveBeenCalledWith('row-9', 'sent');
+  });
+});
+
+describe('handOverSend', () => {
+  const storeWith = (handOver: jest.Mock) => {
+    const release = jest.fn().mockResolvedValue(undefined);
+    const markFailed = jest.fn().mockResolvedValue(undefined);
+    const store = {
+      handOver,
+      complete: jest.fn().mockResolvedValue(undefined),
+      release,
+      markFailed,
+    } as unknown as SendIdempotencyService;
+    return { store, release, markFailed };
+  };
+
+  it('records the hand-over of the claim the send runs under, once however often it is called', async () => {
+    const handOver = jest.fn().mockResolvedValue(undefined);
+    const { store } = storeWith(handOver);
+
+    await runClaimedSend(store, 'row-1', async () => {
+      await handOverSend();
+      await handOverSend();
+      return { messageId: 'm1' };
+    });
+
+    expect(handOver).toHaveBeenCalledTimes(1);
+    expect(handOver).toHaveBeenCalledWith('row-1');
+  });
+
+  it('refuses the send with an error proving nothing went out, which frees the key', async () => {
+    const refusal = new ConflictException('taken over');
+    const { store, release, markFailed } = storeWith(jest.fn().mockRejectedValue(refusal));
+    const engine = jest.fn<Promise<unknown>, []>();
+
+    await expect(
+      runClaimedSend(store, 'row-1', async () => {
+        await handOverSend();
+        return engine();
+      }),
+    ).rejects.toBe(refusal);
+
+    expect(engine).not.toHaveBeenCalled();
+    expect(isHandOverRefusal(refusal)).toBe(true);
+    expect(provesNothingSent(refusal)).toBe(true);
+    expect(release).toHaveBeenCalledWith('row-1');
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for a send that holds no claim', async () => {
+    await expect(handOverSend()).resolves.toBeUndefined();
+    expect(isHandOverRefusal(new Error('unrelated'))).toBe(false);
+    expect(isHandOverRefusal(null)).toBe(false);
   });
 });

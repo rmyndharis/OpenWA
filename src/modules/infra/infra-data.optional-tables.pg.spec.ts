@@ -3,6 +3,7 @@ import 'reflect-metadata';
 import { randomUUID } from 'crypto';
 import { DataSource } from 'typeorm';
 import { InfraDataService } from './infra-data.service';
+import { readExport } from '../../../test/helpers/read-export';
 import { EXPORT_TABLES } from './export-tables';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
@@ -114,14 +115,14 @@ describePostgres('PostgreSQL restore tolerates absent optional archive tables', 
     if (admin?.isInitialized) await admin.destroy();
   });
   it('restores an archive against an intact synchronized schema', async () => {
-    const dump = await service.exportData();
+    const dump = await readExport(service.exportData());
     expect(dump.skippedTables).toEqual([]);
     await expect(service.importData(dump)).resolves.toMatchObject({ imported: true, warnings: [] });
     expect(await ds.getRepository(Session).findOneBy({ id: sessionId })).not.toBeNull();
   });
   it.each(optionalTables)('restores the real empty-table export when $table is absent', async ({ table, key }) => {
     await ds.query(`DROP TABLE "${table}" CASCADE`);
-    const dump = await service.exportData();
+    const dump = await readExport(service.exportData());
     expect(dump.skippedTables).toContain(table);
     expect(dump.tables[key]).toEqual([]);
     await expect(service.importData(dump)).resolves.toMatchObject({ imported: true, warnings: [] });
@@ -135,7 +136,7 @@ describePostgres('PostgreSQL restore tolerates absent optional archive tables', 
   });
   it('rolls back completed clears and inserts after a genuine malformed row', async () => {
     const before = await ds.query<unknown[]>('SELECT * FROM sessions ORDER BY id');
-    const dump = await service.exportData();
+    const dump = await readExport(service.exportData());
     const addedId = randomUUID();
     const kept = dump.tables.sessions[0];
     dump.tables.sessions = [
@@ -149,7 +150,7 @@ describePostgres('PostgreSQL restore tolerates absent optional archive tables', 
     expect(await ds.getRepository(Session).findOneBy({ id: addedId })).toBeNull();
   });
   it('rejects a nonempty table payload that the target schema cannot restore atomically', async () => {
-    const dump = await service.exportData();
+    const dump = await readExport(service.exportData());
     await ds.query('DROP TABLE message_batches');
     const before = await ds.query<unknown[]>('SELECT * FROM sessions ORDER BY id');
     dump.tables.messageBatches = [
@@ -176,7 +177,7 @@ describePostgres('PostgreSQL restore tolerates absent optional archive tables', 
   });
   it('rolls back a genuine DELETE error instead of treating it as an optional table', async () => {
     const before = await ds.query<unknown[]>('SELECT * FROM sessions ORDER BY id');
-    const dump = await service.exportData();
+    const dump = await readExport(service.exportData());
     await ds.query(
       `CREATE FUNCTION fail_clear() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'fixture blocked delete'; END $$`,
     );
@@ -201,7 +202,7 @@ describePostgres('PostgreSQL restore tolerates absent optional archive tables', 
     });
 
     try {
-      const dump = await service.exportData();
+      const dump = await readExport(service.exportData());
       expect(dump.tables.sessions).toHaveLength(1);
       expect(queryCalls.some(sql => /REPEATABLE READ/i.test(sql))).toBe(true);
       expect(queryCalls.some(sql => /SET TRANSACTION READ ONLY/i.test(sql))).toBe(true);

@@ -1,27 +1,16 @@
-// saveConfig writes the generated env via fs.writeFileSync and reads the existing file
-// via fs.existsSync/readFileSync; mock those so tests assert produced content without
-// touching the filesystem. existsSync defaults to false (no prior config) — except for
-// .node probes, which better-sqlite3's binding loader uses to locate its prebuilt binary;
-// a blanket false would send it after a node-gyp build that isn't there.
-jest.mock('fs', () => {
-  const actual = jest.requireActual<typeof import('fs')>('fs');
-  return {
-    ...actual,
-    writeFileSync: jest.fn(),
-    // saveConfig now writes the generated env via writeSecretFile, which chmods 0600 — mock it
-    // so the secret-hygiene path never touches the real filesystem.
-    chmodSync: jest.fn(),
-    existsSync: jest.fn((p: unknown) => (typeof p === 'string' && p.endsWith('.node') ? actual.existsSync(p) : false)),
-    readFileSync: jest.fn().mockReturnValue(''),
-    createReadStream: jest.fn(() => jest.requireActual<typeof import('stream')>('stream').Readable.from([])),
-  };
-});
-
 import { DataSource, IsNull, QueryFailedError } from 'typeorm';
 import { ConflictException } from '@nestjs/common';
 import { InfraDataController } from './infra-data.controller';
-import { InfraDataService, restoreSessionOwnership, toSqliteDatetime } from './infra-data.service';
+import {
+  InfraDataService,
+  restoreSessionOwnership,
+  toSqliteDatetime,
+  type InfraExportDataResult,
+} from './infra-data.service';
+import { readExport } from '../../../test/helpers/read-export';
 import { EXPORT_TABLES } from './export-tables';
+import * as exportSnapshot from './export-snapshot';
+import type { ExportSnapshot } from './export-snapshot';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
@@ -45,6 +34,34 @@ import { ScopeBindingService } from '../integration/scope-binding.service';
 import { PluginInstanceService } from '../integration/plugin-instance.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { BadRequestException } from '@nestjs/common';
+
+/** The statements prepared from now on, on whichever connection of the driver an export reads through. */
+const watchPrepared = (ds: DataSource) => {
+  const connection = (ds.driver as unknown as { databaseConnection: object }).databaseConnection;
+  const prepare = jest.spyOn(Object.getPrototypeOf(connection) as { prepare: (sql: string) => unknown }, 'prepare');
+  return { statements: () => prepare.mock.calls.map(([sql]) => sql), restore: () => prepare.mockRestore() };
+};
+
+/**
+ * Has the next export read through `query` instead of a database: a scan is one call, handed on in
+ * batches. The placeholder style follows the dialect named.
+ */
+const exportThrough = (query: jest.Mock, type = 'better-sqlite3'): void => {
+  const snapshot: ExportSnapshot = {
+    at: new Date(),
+    failedStatementAborts: false,
+    placeholder: position => (type === 'postgres' ? `$${position}` : '?'),
+    query: <T>(sql: string, params?: unknown[]) => query(sql, params) as Promise<T>,
+    scan: async (sql: string, rows: number) => {
+      const all = (await query(sql)) as unknown[];
+      return (async function* () {
+        for (let from = 0; from < all.length; from += rows) yield await Promise.resolve(all.slice(from, from + rows));
+      })();
+    },
+    close: () => Promise.resolve(),
+  };
+  jest.spyOn(exportSnapshot, 'openExportSnapshot').mockResolvedValue(snapshot);
+};
 
 describe('InfraDataController.importData round-trips export-data (no silent message/batch loss)', () => {
   let ds: DataSource;
@@ -125,7 +142,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     // export-data does SELECT *, so the dump genuinely carries the ownership columns. Rewriting them
     // to a FOREIGN node proves the restore ignores the payload: taking them from the backup would
     // install another host's claim with a still-future lease and 409 every start until it lapsed.
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     for (const row of dump.tables.sessions as unknown as Record<string, unknown>[]) {
       row.nodeId = 'node-from-another-host';
       row.nodeUrl = 'http://198.51.100.9:2785';
@@ -148,7 +165,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     await seedSession('s2');
     await ds.getRepository(Session).update({ id: 's1' }, { desiredState: 'stopped' });
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     const res = await controller.importData({ tables: dump.tables });
     expect(res.warnings).toEqual([]);
 
@@ -173,7 +190,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
         }),
       );
     }
-    const both = await controller.exportData();
+    const both = await controller.exportData().then(readExport);
     const onlyS2 = {
       tables: {
         ...both.tables,
@@ -193,7 +210,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
   it('carries LIVE claims forward by their remaining time, including a peer node’s', async () => {
     await seedSession('s1');
     await seedSession('s2');
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     // Seeded AFTER the export on purpose: the sessions importer writes 13 columns and none of them is
     // ownership, so the dump cannot carry these values — and stamping them here keeps the assertion
@@ -275,7 +292,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
 
   it('holds the ownership loss-detection token for the whole transaction, and releases it', async () => {
     await seedSession('s1');
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     const events: string[] = [];
     let held = 0;
@@ -314,7 +331,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
 
   it('refuses outright when another transaction already holds the connection, before deleting anything', async () => {
     await seedSession('s1');
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     // better-sqlite3 hands out a SINGLETON runner, so an import started while a session create or
     // delete holds a transaction becomes a SAVEPOINT inside it: its commit issues RELEASE SAVEPOINT,
@@ -344,7 +361,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
 
   it('runs normally once no other transaction holds the connection', async () => {
     await seedSession('s1');
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     const outer = ds.createQueryRunner();
     await outer.connect();
@@ -357,7 +374,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
 
   it('refuses a second concurrent import instead of letting two share one transaction', async () => {
     await seedSession('s1');
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     // Why this matters on the default dialect: BetterSqlite3Driver.createQueryRunner() returns a
     // SINGLETON runner, so two overlapping imports share one transaction. The second startTransaction
@@ -380,7 +397,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
 
   it('accepts an import again once the previous one has finished', async () => {
     await seedSession('s1');
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     await expect(controller.importData({ tables: dump.tables })).resolves.toMatchObject({ imported: true });
     await expect(controller.importData({ tables: dump.tables })).resolves.toMatchObject({ imported: true });
@@ -390,21 +407,21 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
   // uncommitted, possibly rolled-back tables and archive a state that is neither the old nor the new DB.
   it('refuses an export while an import is running', async () => {
     await seedSession('s1');
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     const importing = controller.importData({ tables: dump.tables });
     const refusal = await controller.exportData().catch((e: unknown) => e);
     expect(refusal).toBeInstanceOf(ConflictException);
     expect((refusal as ConflictException).getResponse()).toMatchObject({ code: 'IMPORT_ALREADY_RUNNING' });
     await expect(importing).resolves.toMatchObject({ imported: true });
-    await expect(controller.exportData()).resolves.toMatchObject({ counts: { sessions: 1 } });
+    await expect(controller.exportData().then(readExport)).resolves.toMatchObject({ counts: { sessions: 1 } });
   });
 
   it('refuses an import while an export is running', async () => {
     await seedSession('s1');
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
-    const exporting = controller.exportData();
+    const exporting = controller.exportData().then(readExport);
     const refusal = await controller.importData({ tables: dump.tables }).catch((e: unknown) => e);
     expect(refusal).toBeInstanceOf(ConflictException);
     expect((refusal as ConflictException).getResponse()).toMatchObject({ code: 'EXPORT_IN_PROGRESS' });
@@ -431,7 +448,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
       return rows;
     });
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     jest.restoreAllMocks();
 
     expect(dump.counts).toMatchObject({ sessions: 1, templates: 1 });
@@ -441,7 +458,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
 
   it('releases the loss-detection token even when the transaction never opens', async () => {
     await seedSession('s1');
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     let held = 0;
     const ownership = {
@@ -474,7 +491,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
 
   it('releases the loss-detection token even when the query runner cannot be created', async () => {
     await seedSession('s1');
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     let held = 0;
     const ownership = {
@@ -513,7 +530,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
 
     it('when BEGIN fails', async () => {
       await seedSession('s1');
-      const dump = await controller.exportData();
+      const dump = await controller.exportData().then(readExport);
       const releases = watchRunners(runner => {
         runner.startTransaction = () => Promise.reject(new Error('BEGIN failed'));
       });
@@ -527,7 +544,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
 
     it('when another transaction already holds the connection', async () => {
       await seedSession('s1');
-      const dump = await controller.exportData();
+      const dump = await controller.exportData().then(readExport);
       const releases = watchRunners(runner => {
         Object.defineProperty(runner, 'isTransactionActive', { value: true });
       });
@@ -543,7 +560,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
 
     it('and still reports the failure of BEGIN when giving the runner back fails too', async () => {
       await seedSession('s1');
-      const dump = await controller.exportData();
+      const dump = await controller.exportData().then(readExport);
       watchRunners(runner => {
         runner.startTransaction = () => Promise.reject(new Error('BEGIN failed'));
         runner.release = () => Promise.reject(new Error('release failed'));
@@ -556,7 +573,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
 
   it('does not suspend loss detection on a dialect where each query runner has its own connection', async () => {
     await seedSession('s1');
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     let suspends = 0;
     const ownership = {
@@ -586,7 +603,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
   it('rolls the whole import back when ownership cannot be re-applied, instead of reporting success', async () => {
     await seedSession('s1');
     await ds.getRepository(Session).update({ id: 's1' }, { nodeId: 'node-a', nodeUrl: 'http://10.0.0.5:2785' });
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     // Fail only the ownership UPDATE, leaving every other statement alone. On PostgreSQL a failed
     // statement aborts the transaction, so a caller that degraded this to a notice and committed
@@ -617,7 +634,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
   it('answers imported:false with the real row error when PostgreSQL aborts the transaction', async () => {
     await seedSession('s1');
     await seedSession('s2');
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     // PostgreSQL semantics on the SQLite harness: the first sessions INSERT fails, and from then on
     // every statement except ROLLBACK fails with 25P02, as it would on an aborted PG transaction.
@@ -673,7 +690,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
   it('leaves a session that had no claim unclaimed rather than inventing one', async () => {
     await seedSession('s1');
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     const res = await controller.importData({ tables: dump.tables });
     expect(res.imported).toBe(true);
 
@@ -717,7 +734,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
       }),
     );
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     expect(dump.counts.messages).toBe(1);
     expect(dump.counts.messageBatches).toBe(1);
 
@@ -759,10 +776,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     }
   };
 
-  const exportedMeta = (
-    dump: Awaited<ReturnType<typeof controller.exportData>>,
-    id: string,
-  ): Record<string, unknown> => {
+  const exportedMeta = (dump: InfraExportDataResult, id: string): Record<string, unknown> => {
     const row = dump.tables.messages.find(r => r.id === id);
     return (typeof row?.metadata === 'string' ? JSON.parse(row.metadata) : row?.metadata) as Record<string, unknown>;
   };
@@ -788,7 +802,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     );
 
     await withBudget(1_000_000, async () => {
-      const meta = exportedMeta(await controller.exportData(), 'm-small');
+      const meta = exportedMeta(await controller.exportData().then(readExport), 'm-small');
       expect(meta.media).toEqual({ mimetype: 'image/jpeg', data: base64 });
     });
   });
@@ -818,7 +832,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
 
     // Budget of zero: everything strippable WOULD be stripped, so surviving proves the URL guard.
     await withBudget(0, async () => {
-      const meta = exportedMeta(await controller.exportData(), 'm-url');
+      const meta = exportedMeta(await controller.exportData().then(readExport), 'm-url');
       expect(meta.media).toEqual({ mimetype: 'image/png', filename: 'promo.png', data: url });
     });
   });
@@ -847,7 +861,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     );
 
     await withBudget(0, async () => {
-      const meta = exportedMeta(await controller.exportData(), 'm-url-upper');
+      const meta = exportedMeta(await controller.exportData().then(readExport), 'm-url-upper');
       expect(meta.media).toEqual({ mimetype: 'image/png', filename: 'promo.png', data: url });
     });
   });
@@ -881,7 +895,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     await seedPhoto('m-newer', 1800000000, newerPhoto);
 
     await withBudget(Buffer.byteLength(newerPhoto, 'utf8'), async () => {
-      const dump = await controller.exportData();
+      const dump = await controller.exportData().then(readExport);
       expect(exportedMeta(dump, 'm-newer').media).toEqual({ mimetype: 'image/jpeg', data: newerPhoto });
       expect(exportedMeta(dump, 'm-older').media).toMatchObject({ omitted: true });
     });
@@ -897,7 +911,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     );
 
     await withBudget(0, async () => {
-      const dump = await controller.exportData();
+      const dump = await controller.exportData().then(readExport);
       expect(dump.tables.messages.find(r => r.id === 'm-null')?.metadata).toBe('null');
     });
   });
@@ -924,9 +938,9 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
       }),
     );
 
-    let dump!: Awaited<ReturnType<typeof controller.exportData>>;
+    let dump!: InfraExportDataResult;
     await withBudget(0, async () => {
-      dump = await controller.exportData();
+      dump = await controller.exportData().then(readExport);
     });
     const exported = dump.tables.messages.find(r => r.id === 'm-media');
     const meta = exportedMeta(dump, 'm-media') as { media: Record<string, unknown>; ack: number };
@@ -995,7 +1009,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     );
 
     await withBudget(0, async () => {
-      const dump = await controller.exportData();
+      const dump = await controller.exportData().then(readExport);
       const row = dump.tables.messageBatches.find(r => r.id === 'b-media');
       const msgs = (typeof row?.messages === 'string' ? JSON.parse(row.messages) : row?.messages) as Array<{
         content: { image: Record<string, unknown> };
@@ -1038,10 +1052,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     await seedBatch('b-older', '2026-01-01T00:00:00.000Z', olderPayload);
     await seedBatch('b-newer', '2026-06-01T00:00:00.000Z', newerPayload);
 
-    const batchImage = (
-      dump: Awaited<ReturnType<typeof controller.exportData>>,
-      id: string,
-    ): Record<string, unknown> => {
+    const batchImage = (dump: InfraExportDataResult, id: string): Record<string, unknown> => {
       const row = dump.tables.messageBatches.find(r => r.id === id);
       const msgs = (typeof row?.messages === 'string' ? JSON.parse(row.messages) : row?.messages) as Array<{
         content: { image: Record<string, unknown> };
@@ -1050,7 +1061,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     };
 
     await withBudget(Buffer.byteLength(newerPayload, 'utf8'), async () => {
-      const dump = await controller.exportData();
+      const dump = await controller.exportData().then(readExport);
       expect(batchImage(dump, 'b-newer')).toEqual({ base64: newerPayload, mimetype: 'image/png' });
       expect(batchImage(dump, 'b-older')).not.toHaveProperty('base64');
     });
@@ -1126,10 +1137,10 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     for (const budget of [0, 150_000, 1_700_000, 1_760_000, 10_000_000]) {
       await withBudget(budget, async () => {
         const expected = await wholeTableExport(budget);
-        const query = jest.spyOn(ds, 'query');
-        const dump = await controller.exportData();
-        const reads = query.mock.calls.map(([sql]) => sql);
-        query.mockRestore();
+        const prepared = watchPrepared(ds);
+        const dump = await controller.exportData().then(readExport);
+        const reads = prepared.statements();
+        prepared.restore();
 
         expect(dump.tables.messages).toEqual(expected.tables.messages);
         expect(dump.tables.messageBatches).toEqual(expected.tables.messageBatches);
@@ -1227,7 +1238,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
       new InfraDataService(cfg as never, ds, undefined, undefined, undefined, undefined, undefined, moduleRef as never),
     );
 
-    const dump = await scopedController.exportData();
+    const dump = await scopedController.exportData().then(readExport);
     expect(dump.counts.pluginInstances).toBe(2);
     expect(dump.counts.integrationDeliveryFailures).toBe(1);
 
@@ -1289,7 +1300,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
       }),
     );
 
-    const dump = await controller.exportData('true');
+    const dump = await controller.exportData('true').then(readExport);
     expect(dump.counts.pluginInstances).toBe(1);
     expect(dump.tables.pluginInstances[0].secret).toBe('hmac-secret');
     expect(dump.tables.pluginInstances[0].verifyToken).toBe('verify-tok');
@@ -1379,7 +1390,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
       new InfraDataService(cfg as never, ds, undefined, undefined, undefined, undefined, undefined, moduleRef as never),
     );
 
-    const dump = await scopedController.exportData('false');
+    const dump = await scopedController.exportData('false').then(readExport);
     const chatwoot = dump.tables.pluginInstances.find(r => r.id === 'chatwoot:acct-arr')!;
     expect('secret' in chatwoot).toBe(false);
     expect('verifyToken' in chatwoot).toBe(false);
@@ -1410,7 +1421,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
       }),
     );
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     expect(dump.counts.conversationMappings).toBe(1);
 
     const res = await controller.importData({ tables: dump.tables });
@@ -1448,7 +1459,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
       }),
     );
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     expect(dump.counts.webhookDeliveryFailures).toBe(1);
 
     const res = await controller.importData({ tables: dump.tables });
@@ -1505,7 +1516,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
       }),
     );
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     expect(dump.counts.ingressEvents).toBe(2);
 
     await ingressRepo.clear();
@@ -1805,7 +1816,7 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
     await lidRepo.save(lidRepo.create({ lid: '111', phone: '628111', sessionId: 's1', isReported: true }));
     await lidRepo.save(lidRepo.create({ lid: '222', phone: null, sessionId: 's1' })); // negative cache
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     expect((dump.tables as unknown as { lidMappings?: unknown[] }).lidMappings).toHaveLength(2);
 
     // Simulate restoring into a fresh data DB (the documented backend-migration flow).
@@ -1837,7 +1848,7 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
       repo.create({ sessionId: 's1', chatId: '120363@g.us', pinned: true }),
     ]);
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     await repo.clear();
     const res = await controller.importData({ tables: dump.tables });
 
@@ -1873,7 +1884,7 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
       }),
     );
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     expect((dump.tables as unknown as { webhookOutboxEvents?: unknown[] }).webhookOutboxEvents).toHaveLength(1);
 
     const res = await controller.importData({ tables: dump.tables });
@@ -1886,7 +1897,7 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
 
   it('restores legacy terminal failures using a deterministic keeper without losing independent records', async () => {
     await seedSession('s1');
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     const base = {
       webhookId: 'wh-1',
       sessionId: 's1',
@@ -1923,7 +1934,7 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
     'preserves restore rollback for a %s error in terminal failures',
     async problem => {
       await seedSession('s1');
-      const dump = await controller.exportData();
+      const dump = await controller.exportData().then(readExport);
       const base = {
         id: 'same-id',
         webhookId: 'wh-1',
@@ -1966,15 +1977,18 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
       lastError: 'HTTP 503',
       payload: { body: 'x'.repeat(2 * 1024 * 1024) },
     });
-    const query = jest.spyOn(ds, 'query');
-    const dump = await controller.exportData();
+    const prepared = watchPrepared(ds);
+    const dump = await controller.exportData().then(readExport);
     expect(dump.tables.webhookDeliveryFailures).toHaveLength(1);
     expect(dump.tables.webhookDeliveryFailures[0]).not.toHaveProperty('payload');
-    const reads = query.mock.calls.filter(([sql]) => /^SELECT .*FROM webhook_delivery_failures$/i.test(sql));
+    const reads = prepared.statements().filter(sql => /^SELECT .*FROM webhook_delivery_failures$/i.test(sql));
+    prepared.restore();
     expect(reads).toHaveLength(1);
-    expect(reads[0][0]).not.toMatch(/\*|payload/);
+    expect(reads[0]).not.toMatch(/\*|payload/);
     await ds.query('ALTER TABLE webhook_delivery_failures DROP COLUMN payload');
-    expect((await controller.exportData()).tables.webhookDeliveryFailures).toEqual(dump.tables.webhookDeliveryFailures);
+    expect((await controller.exportData().then(readExport)).tables.webhookDeliveryFailures).toEqual(
+      dump.tables.webhookDeliveryFailures,
+    );
   });
 
   // A PostgreSQL export serializes CreateDateColumn/UpdateDateColumn values as ISO `...T...Z`, while
@@ -2087,7 +2101,7 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
       }),
     );
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     await msgRepo.clear();
     const res = await controller.importData({ tables: dump.tables });
 
@@ -2120,7 +2134,7 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
       }),
     );
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     await msgRepo.clear();
     const res = await controller.importData({ tables: dump.tables });
 
@@ -2128,6 +2142,111 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
     const restored = await msgRepo.findOneByOrFail({ waMessageId: 'WA-M1' });
     expect(restored.mediaPath).toBe('chat-media/s1/1f0c8f4e-0000-4000-8000-000000000000.png');
     expect(restored.mediaMimetype).toBe('image/png');
+  });
+
+  // A message a hook filed under another chat is judged by the chat the engine reported, kept in a column no default
+  // read returns: a restore without it would judge the row by the chat the hook chose again.
+  it("restores the engine's chat of a message a hook moved on a backup→restore", async () => {
+    await seedSession('s1');
+    const msgRepo = ds.getRepository(Message);
+    const engineRef = { chatId: '628111@c.us', direction: MessageDirection.INCOMING, author: null };
+    await msgRepo.insert([
+      {
+        sessionId: 's1',
+        waMessageId: 'WA-MOVED',
+        chatId: '628999@c.us',
+        from: '628111@c.us',
+        to: 'me@c.us',
+        engineRef,
+      },
+      { sessionId: 's1', waMessageId: 'WA-KEPT', chatId: '628111@c.us', from: '628111@c.us', to: 'me@c.us' },
+    ]);
+
+    const dump = await controller.exportData().then(readExport);
+    const exported = (dump.tables.messages as Array<{ waMessageId: string; engineRef: unknown }>).map(row => [
+      row.waMessageId,
+      row.engineRef,
+    ]);
+    expect(exported).toEqual(expect.arrayContaining([['WA-KEPT', null]]));
+    await msgRepo.clear();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    const restored = (await msgRepo.find({
+      select: { waMessageId: true, engineRef: true },
+      order: { waMessageId: 'ASC' },
+    })) as Array<Pick<Message, 'waMessageId' | 'engineRef'>>;
+    expect(restored).toEqual([
+      { waMessageId: 'WA-KEPT', engineRef: null },
+      { waMessageId: 'WA-MOVED', engineRef },
+    ]);
+  });
+
+  // An API send's row still to be merged onto the echo row that took its id names that id in a column no default read
+  // returns: a restore without it would leave the message in its thread twice for good.
+  it('restores the echo row an API send is still to be merged onto on a backup→restore', async () => {
+    await seedSession('s1');
+    const msgRepo = ds.getRepository(Message);
+    await msgRepo.insert([
+      { sessionId: 's1', waMessageId: 'WA-SENT', chatId: '628111@c.us', from: 'me@c.us', to: '628111@c.us' },
+      { sessionId: 's1', chatId: '628111@c.us', from: 'me@c.us', to: '628111@c.us', echoOf: 'WA-SENT' },
+    ]);
+
+    const dump = await controller.exportData().then(readExport);
+    await msgRepo.clear();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    const restored = (await msgRepo.find({
+      select: { waMessageId: true, echoOf: true },
+      order: { echoOf: 'ASC' },
+    })) as Array<Pick<Message, 'waMessageId' | 'echoOf'>>;
+    expect(restored).toEqual([
+      { waMessageId: 'WA-SENT', echoOf: null },
+      { waMessageId: null, echoOf: 'WA-SENT' },
+    ]);
+  });
+
+  // The outbox row of a send a hook moved, never stored, is how a change of it still reaches its copies.
+  it("restores the engine's chat of a delivery whose message a hook moved on a backup→restore", async () => {
+    await seedSession('s1');
+    const outboxRepo = ds.getRepository(WebhookOutboxEvent);
+    const engineRef = { chatId: '628111@c.us', direction: MessageDirection.OUTGOING, author: null };
+    await outboxRepo.insert([
+      {
+        webhookId: 'wh-1',
+        sessionId: 's1',
+        event: 'message.sent',
+        idempotencyKey: 'msg_s1_WA-MOVED_wh-1',
+        deliveryId: 'd-1',
+        payload: { id: 'WA-MOVED', chatId: '628999@c.us', fromMe: true },
+        state: 'pending',
+        engineRef,
+      },
+      {
+        webhookId: 'wh-1',
+        sessionId: 's1',
+        event: 'message.sent',
+        idempotencyKey: 'msg_s1_WA-KEPT_wh-1',
+        deliveryId: 'd-2',
+        payload: { id: 'WA-KEPT', chatId: '628111@c.us', fromMe: true },
+        state: 'pending',
+      },
+    ]);
+
+    const dump = await controller.exportData().then(readExport);
+    await outboxRepo.clear();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    const restored = await outboxRepo.find({
+      select: { deliveryId: true, engineRef: true },
+      order: { deliveryId: 'ASC' },
+    });
+    expect(restored).toEqual([
+      { deliveryId: 'd-1', engineRef },
+      { deliveryId: 'd-2', engineRef: null },
+    ]);
   });
 
   // DELETE FROM sessions cascades to templates + baileys_stored_messages (both FK ON DELETE CASCADE),
@@ -2146,7 +2265,7 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
       }),
     );
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     const res = await controller.importData({ tables: dump.tables });
 
     expect(res.warnings).toEqual([]);
@@ -2177,7 +2296,7 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
       }),
     );
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     const res = await controller.importData({ tables: dump.tables });
 
     expect(res.imported).toBe(true);
@@ -2203,7 +2322,7 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
       }),
     );
 
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     expect(dump.tables.webhooks).toHaveLength(1);
     const exported = dump.tables.webhooks[0] as unknown as Record<string, unknown>;
     expect(exported).not.toHaveProperty('secret');
@@ -2279,7 +2398,7 @@ describe('InfraDataController audit trail — import emits only on a committed r
     await seedSession('s1');
     const audit = { logInfo: jest.fn().mockResolvedValue(null) };
     const controller = build(audit);
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     const res = await controller.importData({ tables: dump.tables });
     expect(res.imported).toBe(true);
     const actions = (audit.logInfo.mock.calls as Array<[AuditAction, unknown]>).map(c => c[0]);
@@ -2297,7 +2416,7 @@ describe('InfraDataController audit trail — import emits only on a committed r
     const controller = new InfraDataController(
       new InfraDataService(cfg as never, ds, audit as never, sessionService as never),
     );
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     // A repeated primary key fails its insert inside the transaction, which rolls the restore back.
     dump.tables.sessions = [dump.tables.sessions[0], dump.tables.sessions[0]];
 
@@ -2324,15 +2443,18 @@ describe('InfraDataController audit trail — import emits only on a committed r
 describe('InfraDataController.exportData optional-table strictness', () => {
   const cfg = { get: (key: string, def?: unknown) => (key === 'dataDatabase.type' ? 'sqlite' : def) };
   // exportData validates its table registry against the DataSource's entity metadata before reading;
-  // the fake stands in for a fully-migrated connection so the registry check passes and the tests
-  // below pin the QUERY-time strictness instead.
-  const fakeDataSource = (query: jest.Mock, type: string): unknown => ({
-    query,
-    options: { type },
-    entityMetadatas: EXPORT_TABLES.map(entry => ({ tableName: entry.table })),
-  });
-  const build = (query: jest.Mock, type = 'better-sqlite3') =>
-    new InfraDataController(new InfraDataService(cfg as never, fakeDataSource(query, type) as never));
+  // the fake stands in for a fully-migrated connection so the registry check passes, and the export
+  // reads through `query`, so the tests below pin the QUERY-time strictness instead.
+  const build = (query: jest.Mock, type = 'better-sqlite3') => {
+    exportThrough(query, type);
+    return new InfraDataController(
+      new InfraDataService(
+        cfg as never,
+        { options: { type }, entityMetadatas: EXPORT_TABLES.map(entry => ({ tableName: entry.table })) } as never,
+      ),
+    );
+  };
+  afterEach(() => jest.restoreAllMocks());
   // Any read of the messages table, whichever of the export's statements it is.
   const readsMessages = (sql: string): boolean => / FROM messages\b/.test(sql);
 
@@ -2343,10 +2465,11 @@ describe('InfraDataController.exportData optional-table strictness', () => {
       : undefined;
 
   /**
-   * A messages table answering each statement the way a database would: the key read, a full-row
-   * read by id (in table order, not the order the ids were asked in) and a bare `SELECT *`. Every
-   * read hands out fresh copies, and `heldBeforeRead` records the payload bytes still carried by rows
-   * handed out earlier at each full-row read. Every other table reads empty.
+   * A messages table answering each statement the way a database would: the two key reads (with and
+   * without the recency column), a full-row read by id (in table order, not the order the ids were
+   * asked in) and a bare `SELECT *`. Every read hands out fresh copies, and `heldBeforeRead` records
+   * the payload bytes still carried by rows handed out earlier at each full-row read. Every other
+   * table reads empty.
    */
   const messagesTable = (rows: Row[]) => {
     const handedOut: Row[] = [];
@@ -2359,15 +2482,12 @@ describe('InfraDataController.exportData optional-table strictness', () => {
     };
     const query = jest.fn((sql: string, params: unknown[] = []) => {
       if (!readsMessages(sql)) return Promise.resolve([]);
-      if (sql.startsWith('SELECT id, "timestamp", OCTET_LENGTH("metadata") AS "payloadBytes" FROM')) {
-        return Promise.resolve(
-          rows.map(row => ({
-            id: row.id,
-            timestamp: row.timestamp,
-            payloadBytes: typeof row.metadata === 'string' ? Buffer.byteLength(row.metadata) : null,
-          })),
-        );
-      }
+      const keys = rows.map(row => ({
+        id: row.id,
+        timestamp: row.timestamp,
+        payloadBytes: typeof row.metadata === 'string' ? Buffer.byteLength(row.metadata) : null,
+      }));
+      if (sql.endsWith(' OCTET_LENGTH("metadata") AS "payloadBytes" FROM messages')) return Promise.resolve(keys);
       if (sql.startsWith('SELECT * FROM messages WHERE id IN (')) {
         return Promise.resolve(handOut(rows.filter(row => params.includes(row.id))));
       }
@@ -2378,7 +2498,7 @@ describe('InfraDataController.exportData optional-table strictness', () => {
   };
   const chunkReads = (query: jest.Mock): Array<[string, unknown[]]> =>
     (query.mock.calls as Array<[string, unknown[]?]>)
-      .filter(([sql]) => readsMessages(sql) && !sql.startsWith('SELECT id,'))
+      .filter(([sql]) => sql.startsWith('SELECT * FROM messages'))
       .map(([sql, params]) => [sql, params ?? []]);
   const photoRow = (id: string, timestamp: unknown, data: string | null): Row => ({
     id,
@@ -2420,13 +2540,13 @@ describe('InfraDataController.exportData optional-table strictness', () => {
   it('tolerates a genuinely absent optional table — and marks it in skippedTables', async () => {
     const missing = Object.assign(new Error('no such table: messages'), { name: 'SqliteError' });
     const query = jest.fn((sql: string) => (readsMessages(sql) ? Promise.reject(missing) : Promise.resolve([])));
-    const dump = await build(query).exportData();
+    const dump = await build(query).exportData().then(readExport);
     expect(dump.counts.messages).toBe(0);
     expect(dump.tables.messages).toEqual([]);
     expect(dump.skippedTables).toContain('messages');
     // Every other table still exported (all empty here, none skipped).
     expect(dump.skippedTables).toEqual(['messages']);
-    // The key read found the table missing; nothing read it again.
+    // The first key read found the table missing; nothing read it again.
     expect(query.mock.calls.filter(([sql]) => readsMessages(sql))).toHaveLength(1);
   });
 
@@ -2451,7 +2571,9 @@ describe('InfraDataController.exportData optional-table strictness', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
       body_ts: "'hello'",
     };
-    const dump = await build(messagesTable([messageRow])).exportData();
+    const dump = await build(messagesTable([messageRow]))
+      .exportData()
+      .then(readExport);
     expect(dump.tables.messages).toHaveLength(1);
     expect(dump.tables.messages[0]).not.toHaveProperty('body_ts');
     expect(dump.tables.messages[0].body).toBe('hello');
@@ -2465,7 +2587,7 @@ describe('InfraDataController.exportData optional-table strictness', () => {
     );
     const query = messagesTable(rows);
 
-    const dump = await withExportBudget(100_000, () => build(query).exportData());
+    const dump = await withExportBudget(100_000, () => build(query).exportData().then(readExport));
 
     const reads = chunkReads(query);
     expect(reads.map(([sql]) => sql)).not.toContain('SELECT * FROM messages');
@@ -2489,20 +2611,58 @@ describe('InfraDataController.exportData optional-table strictness', () => {
     ['better-sqlite3', '?'],
     ['postgres', '$'],
   ])('binds the chunk ids in the %s placeholder style, at most 200 per read', async (type, style) => {
-    // No media at all, so only the row cap splits the reads.
+    // No media at all, so only the row cap splits the reads, and no row is read to spend the budget on.
     const rows = Array.from({ length: 201 }, (_, i) => photoRow(`m${i}`, 1_700_000_000 + i, null));
     const query = messagesTable(rows);
 
-    const dump = await build(query, type).exportData();
+    const dump = await build(query, type).exportData().then(readExport);
 
     const placeholders = (n: number): string =>
       Array.from({ length: n }, (_, i) => (style === '$' ? `$${i + 1}` : '?')).join(', ');
-    const newestFirstIds = rows.map(row => row.id).reverse();
+    const ids = rows.map(row => row.id);
     expect(chunkReads(query)).toEqual([
-      [`SELECT * FROM messages WHERE id IN (${placeholders(200)})`, newestFirstIds.slice(0, 200)],
-      [`SELECT * FROM messages WHERE id IN (${placeholders(1)})`, newestFirstIds.slice(200)],
+      [`SELECT * FROM messages WHERE id IN (${placeholders(200)})`, ids.slice(0, 200)],
+      [`SELECT * FROM messages WHERE id IN (${placeholders(1)})`, ids.slice(200)],
     ]);
     expect(dump.counts.messages).toBe(201);
+  });
+
+  it('spends the budget newest-first, then reads again in table order only the rows that kept no payload', async () => {
+    const rows = [
+      photoRow('m0', 1_700_000_000, 'QUJD'),
+      photoRow('m1', 1_700_000_001, null),
+      photoRow('m2', 1_700_000_002, 'QUJDREVG'),
+    ];
+    const query = messagesTable(rows);
+
+    // Room for the newer photo alone.
+    const dump = await withExportBudget(8, () => build(query).exportData().then(readExport));
+
+    expect(chunkReads(query).map(([, ids]) => ids)).toEqual([
+      ['m2', 'm0'],
+      ['m0', 'm1'],
+    ]);
+    expect(dump.tables.messages.map(row => [row.id, mediaData(row as never)])).toEqual([
+      ['m0', undefined],
+      ['m1', undefined],
+      ['m2', 'QUJDREVG'],
+    ]);
+    expect(dump.omittedInlineMedia).toEqual({ messages: 1, messageBatches: 0 });
+  });
+
+  it('keeps a payload of no bytes whatever the budget, without holding its row', async () => {
+    const rows = [photoRow('m0', 1_700_000_000, ''), photoRow('m1', 1_700_000_001, 'QUJD')];
+    const query = messagesTable(rows);
+
+    const dump = await withExportBudget(0, () => build(query).exportData().then(readExport));
+
+    // Both rows are read twice: neither kept a payload the budget had to pay for.
+    expect(chunkReads(query).map(([, ids]) => ids)).toEqual([
+      ['m1', 'm0'],
+      ['m0', 'm1'],
+    ]);
+    expect(dump.tables.messages.map(row => mediaData(row as never))).toEqual(['', undefined]);
+    expect(dump.omittedInlineMedia).toEqual({ messages: 1, messageBatches: 0 });
   });
 
   it('fails the export when the media table disappears between its key read and a chunk read', async () => {
@@ -2523,7 +2683,7 @@ describe('InfraDataController.exportData optional-table strictness', () => {
       table(sql, sql.includes(' WHERE id IN (') ? params.filter(id => id !== 'm1') : params),
     );
 
-    const dump = await build(query).exportData();
+    const dump = await build(query).exportData().then(readExport);
 
     expect(dump.tables.messages.map(row => row.id)).toEqual(['m2']);
     expect(dump.counts.messages).toBe(1);
@@ -2603,7 +2763,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
   it('restores an active session status as disconnected: the backup describes the source host engines', async () => {
     await seedSession('s1');
     const repo = ds.getRepository(Session);
-    const dump = await build().exportData();
+    const dump = await build().exportData().then(readExport);
     // seedSession writes READY; the export carries it. With no ownership service (single-node
     // default), every row is claimable, so the import must normalize it.
     expect(dump.tables.sessions?.[0]?.status).toBe(SessionStatus.READY);
@@ -2622,7 +2782,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     // The import re-applies the preserved claim after the inserts (restoreSessionOwnership), which
     // is what keeps the row excluded when the normalization runs.
     await repo.update({ id: 'held' }, { nodeId: 'node-b', leaseExpiresAt: new Date(Date.now() + 60_000) });
-    const dump = await build().exportData();
+    const dump = await build().exportData().then(readExport);
 
     const ownership = {
       nodeId: 'node-a',
@@ -2656,7 +2816,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
   it('re-keys a chat state row restored from a name-keyed archive onto its session id', async () => {
     const id = '8f5b1d9e-0c4a-4e21-9d6b-2a7c3f0e1b44';
     await seedSession(id);
-    const dump = await build().exportData();
+    const dump = await build().exportData().then(readExport);
     const session = dump.tables.sessions[0];
 
     const res = await build().importData({
@@ -2672,7 +2832,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     // to the second session and must not be moved onto 'a'.
     await seedSession('a');
     await seedSession('session-a');
-    const dump = await build().exportData();
+    const dump = await build().exportData().then(readExport);
     const updatedAt = dump.tables.sessions[0].updatedAt;
 
     const res = await build().importData({
@@ -2687,7 +2847,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
   // from an archive taken before them are cleaned by the import itself.
   it('clears restored revoked messages and drops restored lid mappings whose phone is not a number', async () => {
     await seedSession('s1');
-    const dump = await build().exportData();
+    const dump = await build().exportData().then(readExport);
     const at = dump.tables.sessions[0].updatedAt;
     const message = (id: string, chatId: string, type: string) => ({
       id,
@@ -2738,7 +2898,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
   // before the neutral vocabulary has to be converted by the import that restores it.
   it('converts the raw message types of a restored archive and leaves the neutral ones alone', async () => {
     await seedSession('s1');
-    const dump = await build().exportData();
+    const dump = await build().exportData().then(readExport);
     const at = dump.tables.sessions[0].updatedAt;
     const message = (id: string, type: string) => ({
       id,
@@ -2786,7 +2946,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     );
 
     const controller = build();
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     expect(dump.counts.automationRules).toBe(1);
     expect(dump.skippedTables).toEqual([]);
 
@@ -2824,7 +2984,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     );
 
     const controller = build();
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     expect(dump.counts.statusUpdates).toBe(1);
     expect(dump.skippedTables).toEqual([]);
 
@@ -2894,7 +3054,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     const lidMappingStore = { reload: jest.fn().mockResolvedValue(undefined) };
     const chatStateStore = { reload: jest.fn().mockResolvedValue(undefined) };
     const controller = build({ lidMappingStore, chatStateStore });
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     const res = await controller.importData({ tables: dump.tables });
     expect(res.imported).toBe(true);
     expect(lidMappingStore.reload).toHaveBeenCalledTimes(1);
@@ -2914,7 +3074,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
   it('409s when a live engine would be orphaned by the replace — unless force=true', async () => {
     await seedSession('s1');
     const controller = build({ sessionService: { getActiveSessionIds: () => ['ghost'] } });
-    const dump = await controller.exportData(); // backup contains only s1, not the running 'ghost'
+    const dump = await controller.exportData().then(readExport); // backup contains only s1, not the running 'ghost'
 
     // Without force: 409 Conflict, and the destructive replace never started.
     const err = await controller.importData({ tables: dump.tables }).catch((e: unknown) => e);
@@ -2939,7 +3099,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
   it('reports restartRequired:false when no live engine is orphaned', async () => {
     await seedSession('s1');
     const controller = build({ sessionService: { getActiveSessionIds: () => ['s1'] } });
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     const res = await controller.importData({ tables: dump.tables });
     expect(res.imported).toBe(true);
     expect(res.restartRequired).toBe(false);
@@ -2952,7 +3112,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     const controller = build({
       sessionService: { getActiveSessionIds: () => ['ghost'], stopOrphanEngines },
     });
-    const dump = await controller.exportData(); // backup contains only s1, not 'ghost'
+    const dump = await controller.exportData().then(readExport); // backup contains only s1, not 'ghost'
 
     const res = await controller.importData({ tables: dump.tables, stopOrphans: true });
 
@@ -2992,7 +3152,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     const controller = build({
       sessionService: { getActiveSessionIds: () => ['ghost'], stopOrphanEngines },
     });
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
     const filters = { conditions: [{ field: 'type', operator: 'is', value: ['text'], negate: true }] };
 
     const res = await controller.importData({
@@ -3019,7 +3179,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
   ])('refuses an archive whose %s does not parse, replacing nothing', async (_case, warning) => {
     await seedSession('s1');
     await ds.getRepository(Webhook).save({ id: 'wh0', sessionId: 's1', url: 'https://example.com/kept' });
-    const dump = await build().exportData();
+    const dump = await build().exportData().then(readExport);
     const [session] = dump.tables.sessions as unknown as Record<string, unknown>[];
     const webhook = { id: 'wh1', sessionId: 's1', url: 'https://example.com/hook', events: ['message.received'] };
     const tables = warning.includes('session')
@@ -3043,7 +3203,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     const controller = build({
       sessionService: { getActiveSessionIds: () => ['ghost'], stopOrphanEngines },
     });
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     // A message row missing the non-null from/to fails mid-import and forces the all-or-nothing rollback.
     const res = await controller.importData({
@@ -3071,7 +3231,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     const controller = build({
       sessionService: { getActiveSessionIds: () => ['ghost'], stopOrphanEngines },
     });
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     const res = await controller.importData({
       tables: {
@@ -3094,7 +3254,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     const controller = build({
       sessionService: { getActiveSessionIds: () => ['g1', 'g2'], stopOrphanEngines },
     });
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     const res = await controller.importData({ tables: dump.tables, stopOrphans: true });
 
@@ -3111,7 +3271,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     const controller = build({
       sessionService: { getActiveSessionIds: () => ['g1', 'g-init'], stopOrphanEngines },
     });
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     const res = await controller.importData({ tables: dump.tables, stopOrphans: true });
 
@@ -3125,7 +3285,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     // when stopOrphans is requested but the service is unavailable — it falls back to refuse/force.
     await seedSession('s1');
     const controller = build({}); // no sessionService
-    const dump = await controller.exportData();
+    const dump = await controller.exportData().then(readExport);
 
     // Without sessionService there are no active ids to detect, so no orphan, no 409 — the import
     // proceeds normally. (This matches the @Optional() wiring; the gate only engages when the
@@ -3155,16 +3315,16 @@ describe('InfraDataController audit trail (light-dependency handlers)', () => {
       new InfraDataService((overrides.config ?? {}) as never, (overrides.dataDs ?? {}) as never, audit as never),
     );
 
+  afterEach(() => jest.restoreAllMocks());
+
   it('exportData emits INFRA_DATA_EXPORTED with per-table counts', async () => {
     const audit = makeAudit();
     const controller = build(audit, {
       config: { get: (k: string, d?: unknown) => (k === 'dataDatabase.type' ? 'sqlite' : d) },
-      dataDs: {
-        query: jest.fn().mockResolvedValue([]),
-        entityMetadatas: EXPORT_TABLES.map(entry => ({ tableName: entry.table })),
-      },
+      dataDs: { entityMetadatas: EXPORT_TABLES.map(entry => ({ tableName: entry.table })) },
     });
-    await controller.exportData();
+    exportThrough(jest.fn().mockResolvedValue([]));
+    await controller.exportData().then(readExport);
     const calls = audit.logInfo.mock.calls as Array<
       [AuditAction, { metadata: { counts: { sessions: number }; includePluginSecrets: boolean } }]
     >;
@@ -3172,7 +3332,7 @@ describe('InfraDataController audit trail (light-dependency handlers)', () => {
     expect(calls[0][1].metadata.counts.sessions).toBe(0);
     expect(calls[0][1].metadata.includePluginSecrets).toBe(false);
 
-    await controller.exportData('true');
+    await controller.exportData('true').then(readExport);
     expect(calls[1][0]).toBe(AuditAction.INFRA_DATA_EXPORTED);
     expect(calls[1][1].metadata.includePluginSecrets).toBe(true);
   });
@@ -3437,7 +3597,7 @@ describe('InfraDataController.importData re-syncs plugin instance bindings', () 
 
   it('retires the binding of an instance the backup does not contain (opt-in plaintext export)', async () => {
     await seed();
-    const dump = await new InfraDataController(serviceWith(undefined)).exportData('true');
+    const dump = await new InfraDataController(serviceWith(undefined)).exportData('true').then(readExport);
     const tables = {
       ...dump.tables,
       pluginInstances: dump.tables.pluginInstances?.filter(row => row.instanceId !== 'dropped'),
@@ -3462,7 +3622,7 @@ describe('InfraDataController.importData re-syncs plugin instance bindings', () 
 
   it('retires all bindings when importing a default-redacted export (kept instance restored disabled)', async () => {
     await seed();
-    const dump = await new InfraDataController(serviceWith(undefined)).exportData();
+    const dump = await new InfraDataController(serviceWith(undefined)).exportData().then(readExport);
     const tables = {
       ...dump.tables,
       pluginInstances: dump.tables.pluginInstances?.filter(row => row.instanceId !== 'dropped'),
@@ -3489,7 +3649,7 @@ describe('InfraDataController.importData re-syncs plugin instance bindings', () 
 
   it('commits the import and reports a failed resync as a notice with restartRequired', async () => {
     await seed();
-    const dump = await new InfraDataController(serviceWith(undefined)).exportData();
+    const dump = await new InfraDataController(serviceWith(undefined)).exportData().then(readExport);
     const resyncAfterImport = jest.fn().mockRejectedValue(new Error('registry write failed'));
     const moduleRef = { get: () => ({ resyncAfterImport }) };
 
@@ -3535,7 +3695,7 @@ describe('InfraDataService.exportData PostgreSQL snapshot isolation', () => {
       pgDs as never,
     );
 
-    await svc.exportData();
+    await readExport(svc.exportData());
 
     expect(pgDs.createQueryRunner).toHaveBeenCalledTimes(1);
     expect(runner.startTransaction).toHaveBeenCalledWith('REPEATABLE READ');

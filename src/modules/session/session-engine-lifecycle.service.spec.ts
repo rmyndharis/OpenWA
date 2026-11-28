@@ -551,6 +551,165 @@ describe('SessionEngineLifecycle SQL-fenced status and metadata writes', () => {
     );
   });
 
+  // A status write that FAILS (a database error) says nothing about who owns the row, unlike one that matched no
+  // row. The engine is ready, or showing a QR, and still this node's, so its notifications go out after the log.
+  describe('when the fenced status write is rejected', () => {
+    const failWrite = (f: ReturnType<typeof buildLifecycleFixture>): ((error: Error) => void) => {
+      let fail!: (error: Error) => void;
+      f.repository.update.mockImplementationOnce(
+        () => new Promise((_resolve, reject: (error: Error) => void) => (fail = reject)),
+      );
+      return error => fail(error);
+    };
+    const warnings = (f: ReturnType<typeof buildLifecycleFixture>) =>
+      jest
+        .spyOn((f.lifecycle as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn')
+        .mockImplementation(() => undefined);
+    const readyNotified = (f: ReturnType<typeof buildLifecycleFixture>): boolean =>
+      f.events.emitSessionAuthenticated.mock.calls.length > 0 &&
+      f.webhooks.dispatch.mock.calls.some(([, event]) => event === 'session.authenticated') &&
+      f.hooks.execute.mock.calls.some(([event]) => event === 'session:ready');
+    const qrNotified = (f: ReturnType<typeof buildLifecycleFixture>): boolean =>
+      f.events.emitQRCode.mock.calls.length > 0 &&
+      f.webhooks.dispatch.mock.calls.some(([, event]) => event === 'session.qr') &&
+      f.hooks.execute.mock.calls.some(([event]) => event === 'session:qr');
+    const triggers = {
+      ready: {
+        fire: (f: ReturnType<typeof buildLifecycleFixture>) => f.callbacks().onReady?.('628111', 'Local Ready'),
+        notified: readyNotified,
+        logged: 'Failed to persist session ready state',
+      },
+      qr: {
+        fire: (f: ReturnType<typeof buildLifecycleFixture>) => f.callbacks().onQRCode?.('qr-live'),
+        notified: qrNotified,
+        logged: 'Failed to persist an engine status',
+      },
+    };
+
+    it.each(['ready', 'qr'] as const)('%s: logs the failure, then notifies while owned and live', async kind => {
+      const f = buildLifecycleFixture({ initialPhone: null, initialPushName: null });
+      await f.lifecycle.start(ID, { explicit: true });
+      const warn = warnings(f);
+      const fail = failWrite(f);
+
+      triggers[kind].fire(f);
+      await flush();
+      expect(triggers[kind].notified(f)).toBe(false);
+      fail(new Error('SQLITE_BUSY: database is locked'));
+      await flush();
+
+      expect(warn).toHaveBeenCalledWith(
+        triggers[kind].logged,
+        expect.objectContaining({ sessionId: ID, error: 'SQLITE_BUSY: database is locked' }),
+      );
+      expect(triggers[kind].notified(f)).toBe(true);
+    });
+
+    it.each([
+      ['ready', 'ownership moved', (f: ReturnType<typeof buildLifecycleFixture>) => f.owned.delete(ID)],
+      ['ready', 'engine retired', (f: ReturnType<typeof buildLifecycleFixture>) => f.registry.delete(ID)],
+      ['qr', 'ownership moved', (f: ReturnType<typeof buildLifecycleFixture>) => f.owned.delete(ID)],
+      ['qr', 'engine retired', (f: ReturnType<typeof buildLifecycleFixture>) => f.registry.delete(ID)],
+    ] as const)('%s: stays silent when, before the write failed, the %s', async (kind, _change, change) => {
+      const f = buildLifecycleFixture({ initialPhone: null, initialPushName: null });
+      await f.lifecycle.start(ID, { explicit: true });
+      warnings(f);
+      const fail = failWrite(f);
+
+      triggers[kind].fire(f);
+      await flush();
+      change(f);
+      fail(new Error('SQLITE_BUSY: database is locked'));
+      await flush();
+
+      expect(f.events.emitSessionAuthenticated).not.toHaveBeenCalled();
+      expect(f.events.emitQRCode).not.toHaveBeenCalled();
+      expect(f.webhooks.dispatch.mock.calls.filter(([, event]) => event !== 'session.status')).toEqual([]);
+    });
+
+    // The two terminal paths announce their end through the same hook, after the same kind of write.
+    const errorHooks = (f: ReturnType<typeof buildLifecycleFixture>): unknown[][] =>
+      (f.hooks.execute.mock.calls as unknown[][]).filter(([event]) => event === 'session:error');
+    /** Rejects every write of the FAILED status, once `fail` is called. */
+    const failFailedWrites = (f: ReturnType<typeof buildLifecycleFixture>): (() => void) => {
+      let fail!: () => void;
+      const gate = new Promise<void>(resolve => (fail = resolve));
+      const update = f.repository.update.getMockImplementation()!;
+      f.repository.update.mockImplementation((where, patch) =>
+        patch.status === SessionStatus.FAILED
+          ? gate.then(() => Promise.reject(new Error('SQLITE_BUSY: database is locked')))
+          : update(where, patch),
+      );
+      return fail;
+    };
+    const terminal = {
+      'engine error': {
+        config: {},
+        fire: (f: ReturnType<typeof buildLifecycleFixture>) => Promise.resolve(f.callbacks().onError?.('boom')),
+      },
+      'exhausted reconnect': {
+        config: { maxReconnectAttempts: 0 },
+        fire: (f: ReturnType<typeof buildLifecycleFixture>) =>
+          f.lifecycle.handleEngineDisconnected(ID, f.engine as never, 'NAVIGATION'),
+      },
+    };
+
+    it.each(['engine error', 'exhausted reconnect'] as const)(
+      '%s: runs the session:error hook when the FAILED write is rejected and the node still owns the session',
+      async kind => {
+        const f = buildLifecycleFixture({ config: terminal[kind].config });
+        await f.lifecycle.start(ID, { explicit: true });
+        warnings(f);
+        const fail = failFailedWrites(f);
+
+        await terminal[kind].fire(f);
+        await flush();
+        expect(errorHooks(f)).toHaveLength(0);
+        fail();
+        await flush();
+
+        expect(errorHooks(f)).toHaveLength(1);
+      },
+    );
+
+    it.each(['engine error', 'exhausted reconnect'] as const)(
+      '%s: keeps the hook back when ownership moved before the write failed',
+      async kind => {
+        const f = buildLifecycleFixture({ config: terminal[kind].config });
+        await f.lifecycle.start(ID, { explicit: true });
+        warnings(f);
+        const fail = failFailedWrites(f);
+
+        await terminal[kind].fire(f);
+        await flush();
+        f.owned.delete(ID);
+        fail();
+        await flush();
+
+        expect(errorHooks(f)).toHaveLength(0);
+      },
+    );
+
+    // The disconnect path already read a failed write this way; kept here so the three stay alike.
+    it('disconnected: logs the failure, then notifies and arms the reconnect while owned and live', async () => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+      const f = buildLifecycleFixture({ config: { maxReconnectAttempts: 5, reconnectBaseDelay: 1000 } });
+      await f.lifecycle.start(ID, { explicit: true });
+      const warn = warnings(f);
+      f.repository.update.mockRejectedValueOnce(new Error('SQLITE_BUSY: database is locked'));
+
+      await f.lifecycle.handleEngineDisconnected(ID, f.engine as never, 'NAVIGATION');
+      await flush();
+
+      expect(warn).toHaveBeenCalledWith(
+        'Failed to persist the disconnected status',
+        expect.objectContaining({ sessionId: ID, error: 'SQLITE_BUSY: database is locked' }),
+      );
+      expect(f.events.emitSessionDisconnected).toHaveBeenCalledWith(ID, { reason: 'NAVIGATION' });
+      expect(f.reconnectStates().get(ID)?.timer).not.toBeNull();
+    });
+  });
+
   it('delegates isSessionRetired to DB-clock hasLiveOwnClaim on PostgreSQL without comparing local clock', async () => {
     const f = buildLifecycleFixture();
     f.ownership.isPostgres = true;

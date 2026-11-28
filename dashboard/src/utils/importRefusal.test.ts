@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { shouldOfferStopOrphansRetry } from './importRefusal.ts';
+import { importRefusalMessageKey, shouldOfferStopOrphansRetry } from './importRefusal.ts';
 
 // The retry this predicate gates is DESTRUCTIVE: it re-POSTs the replace-all with stopOrphans=true,
 // which tears down live engines. Branching on the 409 status alone offered that retry from a dialog
@@ -61,4 +61,15 @@ test('the api client carries the machine code onto the error this predicate read
     /err\.code = error\.code/,
     'api.ts must copy the response body `code` onto the thrown Error — update this guard, do not delete it',
   );
+});
+
+test('explains a restore the gateway rolled back when it stopped', () => {
+  assert.equal(importRefusalMessageKey(503, 'IMPORT_STOPPED'), 'infrastructure.migration.importStopped');
+});
+
+test('leaves every other refusal to the message the gateway sent', () => {
+  assert.equal(importRefusalMessageKey(503, undefined), undefined);
+  assert.equal(importRefusalMessageKey(503, 'EXPORT_STOPPED'), undefined);
+  assert.equal(importRefusalMessageKey(409, 'IMPORT_STOPPED'), undefined);
+  assert.equal(importRefusalMessageKey(undefined, undefined), undefined);
 });

@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource, type Repository } from 'typeorm';
 import { WorkerThreadChannel } from './worker-thread-channel';
 import { PluginWorkerHost } from './plugin-worker-host';
+import { SANDBOX_MAX_PENDING_CAPS } from './protocol';
 import { HookManager, type HookEvent } from '../../hooks';
 import { EngineRegistry } from '../../../engine/engine-registry.service';
 import type { IncomingMessage, IWhatsAppEngine } from '../../../engine/interfaces/whatsapp-engine.interface';
@@ -38,6 +39,7 @@ const UNCLONEABLE_LOG_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/unclon
 const CONFIG_THROW_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/config-throw-plugin.cjs');
 const IDLE_SPIN_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/idle-spin-plugin.cjs');
 const SENT_ECHO_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/sent-echo-plugin.cjs');
+const WEBHOOK_SLOW_CAP_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/webhook-slow-cap-plugin.cjs');
 const flushAsync = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
 // Run the TS bootstrap inside the worker via ts-node. The base tsconfig is nodenext; we pin the
@@ -450,6 +452,48 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
     if (empty.ok) expect(empty.results.hits).toEqual([]);
 
     await host.terminate();
+  });
+
+  it('keeps serving capability calls after webhook handlers awaiting one ran past the dispatch budget', async () => {
+    // net.fetch is an upstream that never answers but honours its AbortSignal; storage.get answers at once.
+    const host = new PluginWorkerHost(makeChannel(), (verb, _args, _ctx, signal) =>
+      verb === 'storage.get'
+        ? Promise.resolve('stored')
+        : new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('aborted')))),
+    );
+    const deliver = (route: string, deliveryId: string, timeoutMs: number) =>
+      host.dispatchWebhook({
+        instanceId: 'inst-1',
+        route,
+        method: 'POST',
+        headers: {},
+        query: {},
+        body: '{}',
+        rawBody: '{}',
+        verified: true,
+        deliveryId,
+        sessionId: 's1',
+        timeoutMs,
+      });
+    try {
+      await host.load(WEBHOOK_SLOW_CAP_FIXTURE);
+      await host.runLifecycle('onEnable');
+
+      // Twice as many overrunning deliveries as the worker leaves unanswered at once, a few at a time.
+      const perRound = 16;
+      for (let round = 0; round < (SANDBOX_MAX_PENDING_CAPS * 2) / perRound; round++) {
+        const overrun = await Promise.all(
+          Array.from({ length: perRound }, (_unused, i) => deliver('slow', `slow-${round}-${i}`, 100)),
+        );
+        // Each fails as the dispatch timeout, whichever of its two timers ran first.
+        expect(overrun.filter(result => result.ok || result.status !== 504)).toEqual([]);
+      }
+
+      // Each overrun call was answered, so the worker still has room to post this one.
+      await expect(deliver('fast', 'fast-1', 5000)).resolves.toMatchObject({ ok: true, status: 200, body: 'stored' });
+    } finally {
+      await host.terminate();
+    }
   });
 
   it('detects an idle worker spinning in while(true) with zero hooks dispatched via periodic livenessIntervalMs', async () => {

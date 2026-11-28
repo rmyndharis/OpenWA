@@ -9,6 +9,7 @@
  *   SHUTDOWN_DELAY_MS drain                  3 s     always (default; the grace before teardown)
  *   ingress reconciler wait                  5 s     a pass in flight (worst case)
  *   engine teardown                         10 s     always
+ *   kept rows and changes pass               1 s     a session row or change the database refused (what it leaves stays journaled)
  *   auto-start wait                          5 s     shutdown during the boot window
  *   bulk batch drain                         5 s     an in-flight batch at shutdown
  *   maintenance prune/index waits (4 x 1s)   4 s     active archive/status/fts/outbox pass
@@ -24,11 +25,11 @@
  *   WebSocket adapter Redis quit             2 s     REDIS_ENABLED
  *   HTTP close                               0 s     main.ts sets forceCloseConnections
  *
- * Base (single replica, no plugins): 3 + 5 + 10 + 5 + 5 + 4 + 1 + 5 + 5 = 43 s. With a plugin enabled: 53 s.
- * Clustered (QUEUE + REDIS + plugins): 75 s, of which 3 s is the grace.
+ * Base (single replica, no plugins): 3 + 5 + 10 + 1 + 5 + 5 + 4 + 1 + 5 + 5 = 44 s. With a plugin enabled: 54 s.
+ * Clustered (QUEUE + REDIS + plugins): 76 s, of which 3 s is the grace.
  *
- * The teardown after the grace has SHUTDOWN_TEARDOWN_LIMIT_MS (82 s), against 72 s of stages in the
- * clustered case. The 10 s left over is the reserve for the waits that have no cap of their own, before
+ * The teardown after the grace has SHUTDOWN_TEARDOWN_LIMIT_MS (82 s), against 73 s of stages in the
+ * clustered case. The 9 s left over is the reserve for the waits that have no cap of their own, before
  * and after the HTTP close: the database waits listed at the end, the BullModule
  * re-await of the worker close (closeWorkerIfStarted settles it once its cap is hit), the DataSource
  * close and the ffmpeg kill. They take milliseconds when nothing is wedged.

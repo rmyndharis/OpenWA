@@ -183,7 +183,8 @@ describe.each([
             Object.assign(new Error('UNIQUE constraint failed'), { code: 'SQLITE_CONSTRAINT_UNIQUE' }),
           );
         }
-        rows.push({ ...row });
+        // Stored with its key, as the table gives it one.
+        rows.push({ id: `pk-${String(row.waMessageId)}`, ...row });
         return Promise.resolve({ identifiers: [{ id: `pk-${String(row.waMessageId)}` }], generatedMaps: [] });
       }),
       update: jest.fn((where: Row, patch: Row) => {

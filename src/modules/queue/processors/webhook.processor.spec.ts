@@ -1,7 +1,12 @@
 import { DelayedError, Job } from 'bullmq';
-import { FindOperator, Repository } from 'typeorm';
+import { DataSource, FindOperator, Repository } from 'typeorm';
+import { WebhookOutboxEvent } from '../../webhook/entities/webhook-outbox-event.entity';
 import { ConfigService } from '@nestjs/config';
 import { WebhookOutboxService } from '../../webhook/webhook-outbox.service';
+import { WebhookDeliveryService } from '../../webhook/webhook-delivery.service';
+import { Message } from '../../message/entities/message.entity';
+import { LidMappingStoreService } from '../../../engine/identity/lid-mapping-store.service';
+import { dataHash } from '../../webhook/utils/deliver-once';
 import { FAILING_WEBHOOKS_MAX, WebhookProcessor } from './webhook.processor';
 import { MAX_WORKER_CLOSE_WAIT_MS } from './close-worker';
 import { Webhook } from '../../webhook/entities/webhook.entity';
@@ -11,6 +16,7 @@ import { WebhookJobData } from '../../webhook/webhook.service';
 import { getWebhookDeliveryFailuresTotal } from '../../../common/metrics/webhook-delivery-metrics';
 import { fetch as undiciFetch } from 'undici';
 import { createHmac } from 'crypto';
+import { LoggerService } from '../../../common/services/logger.service';
 
 // Delivery goes through undici's fetch (via the SSRF-pinning helper), so mock that, not global fetch.
 jest.mock('undici', () => {
@@ -27,7 +33,12 @@ describe('WebhookProcessor', () => {
   let processor: WebhookProcessor;
   let repo: { update: jest.Mock; findOne: jest.Mock };
   let failureRepo: { insert: jest.Mock; count: jest.Mock; delete: jest.Mock; update: jest.Mock };
-  let outbox: { close: jest.Mock };
+  let outbox: {
+    close: jest.Mock;
+    currentMessagePayload: jest.Mock;
+    isMessageHeld: jest.Mock;
+    forgetUnwritten: jest.Mock;
+  };
   let failureRows: Array<{ webhookId?: string; idempotencyKey?: string | null; attempts?: number }>;
   let hookManager: { execute: jest.Mock };
   let configService: { get: jest.Mock };
@@ -78,7 +89,13 @@ describe('WebhookProcessor', () => {
     // inserts, so a constant would leave that guard unexercised here and let a duplicated row pass.
     failureRows = [];
     const insertedFailures = failureRows;
-    outbox = { close: jest.fn().mockResolvedValue(undefined) };
+    // No outbox row of a message delivery unless a test says otherwise: the job's own payload is posted.
+    outbox = {
+      close: jest.fn().mockResolvedValue(undefined),
+      currentMessagePayload: jest.fn().mockResolvedValue(undefined),
+      isMessageHeld: jest.fn().mockReturnValue(false),
+      forgetUnwritten: jest.fn(),
+    };
     failureRepo = {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
       insert: jest.fn().mockImplementation((rowToInsert: { webhookId?: string; idempotencyKey?: string | null }) => {
@@ -455,13 +472,24 @@ describe('WebhookProcessor', () => {
       expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
     });
 
-    it('treats a failed webhook read as a failed attempt: retried, and dead-lettered on the last one', async () => {
+    it('delays a job whose webhook row cannot be read, spending no attempt and filing no dead-letter row', async () => {
       repo.findOne.mockRejectedValue(new Error('db down'));
+      const job = makeJob({ maxRetries: 3 }, 2);
+      const move = jest.fn().mockResolvedValue(undefined);
+      (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = move;
 
-      await expect(processor.process(makeJob({ maxRetries: 3 }, 0))).rejects.toThrow('db down');
+      await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+      expect(move).toHaveBeenCalledWith(expect.any(Number), 'tok');
+      expect(mockFetch).not.toHaveBeenCalled();
       expect(failureRepo.insert).not.toHaveBeenCalled();
+      expect(hookManager.execute).not.toHaveBeenCalled();
+    });
 
-      await expect(processor.process(makeJob({ maxRetries: 3 }, 2))).rejects.toThrow('db down');
+    it('counts a webhook row that does not parse as a failed attempt, as it will not parse later either', async () => {
+      repo.findOne.mockRejectedValue(new SyntaxError('Unexpected token } in JSON'));
+
+      await expect(processor.process(makeJob({ maxRetries: 3 }, 2))).rejects.toThrow('Unexpected token');
       expect(mockFetch).not.toHaveBeenCalled();
       expect(failureRepo.insert).toHaveBeenCalledTimes(1);
     });
@@ -628,7 +656,7 @@ describe('WebhookProcessor', () => {
 
     it('does not dead-letter an ordinary error with the stall message before a successful retry', async () => {
       const error = new Error('job stalled more than allowable limit');
-      repo.findOne.mockRejectedValueOnce(error);
+      mockFetch.mockRejectedValueOnce(error);
       await expect(processor.process(makeJob())).rejects.toBe(error);
       await processor.onWorkerFailed(makeJob({}, 1), error);
       mockFetch.mockResolvedValue({ ok: true, status: 200 });
@@ -838,6 +866,737 @@ describe('WebhookProcessor', () => {
 
     it('waits no longer than the close cap for a long delivery timeout', async () => {
       expect(await settleAfter(25_000)).toBe(MAX_WORKER_CLOSE_WAIT_MS);
+    });
+  });
+
+  describe('a queued message delivery against the outbox row as SQLite stores it', () => {
+    let ds: DataSource;
+    let realOutbox: WebhookOutboxService;
+    const queued = { id: 'M-1', chatId: '628111@c.us', fromMe: false, body: 'first text' };
+
+    beforeEach(async () => {
+      ds = await new DataSource({
+        type: 'better-sqlite3',
+        database: ':memory:',
+        entities: [WebhookOutboxEvent],
+        synchronize: true,
+      }).initialize();
+      realOutbox = new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent));
+      processor = new WebhookProcessor(
+        repo as unknown as Repository<Webhook>,
+        failureRepo as unknown as Repository<WebhookDeliveryFailure>,
+        hookManager as unknown as HookManager,
+        configService as unknown as ConfigService,
+        realOutbox,
+      );
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    });
+    afterEach(() => ds.destroy());
+
+    const row = (state: string | null, payload: Record<string, unknown> | null): Promise<unknown> =>
+      ds.getRepository(WebhookOutboxEvent).insert({
+        webhookId: 'wh-1',
+        sessionId: 'sess-1',
+        event: 'message.received',
+        idempotencyKey: 'k',
+        deliveryId: 'd',
+        payload,
+        state,
+      } as never);
+    const job = (): Job<WebhookJobData> => {
+      const queuedJob = makeJob({ baseHash: dataHash(queued) });
+      queuedJob.data.payload.data = { ...queued };
+      return queuedJob;
+    };
+
+    it.each([
+      ['a row left from before rows had a state', null, queued],
+      ['an open row without a payload', 'queued', null],
+    ] as const)('posts what it holds for %s, which says nothing of a change', async (_label, state, payload) => {
+      await row(state, payload);
+
+      await processor.process(job());
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['dispatched', 'failed'])('posts nothing for a row closed as %s', async state => {
+      await row(state, null);
+
+      await processor.process(job());
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the outbox row of a message delivery, read before the POST', () => {
+    const rowData = { id: 'M-1', chatId: '628111@c.us', fromMe: false, body: 'edited text', edited: true };
+    const queuedData = { id: 'M-1', chatId: '628111@c.us', fromMe: false, body: 'first text' };
+    const sentBody = (): { data: Record<string, unknown>; idempotencyKey: string; deliveryId: string } =>
+      JSON.parse((mockFetch.mock.calls[0] as [string, { body: string }])[1].body) as {
+        data: Record<string, unknown>;
+        idempotencyKey: string;
+        deliveryId: string;
+      };
+    const queuedJob = (attemptsMade = 0): Job<WebhookJobData> => {
+      const job = makeJob({ baseHash: dataHash(queuedData), replayData: queuedData }, attemptsMade);
+      job.data.payload.data = { ...queuedData };
+      return job;
+    };
+
+    // Queued where its outbox row could not be written, and run where no copy of it is kept: the message row says.
+    describe('of a job queued with no outbox row, run where no copy of it is kept', () => {
+      let messages: { find: jest.Mock };
+      const stored = (row: Record<string, unknown>) => ({
+        id: 'r1',
+        chatId: '628111@c.us',
+        type: 'text',
+        body: 'first text',
+        metadata: {},
+        ...row,
+      });
+      const marked = (event = 'message.received', data: Record<string, unknown> = queuedData): Job<WebhookJobData> => {
+        const job = makeJob({ event, baseHash: dataHash(data), unwritten: data });
+        job.data.payload = { ...job.data.payload, event, data: { ...data } };
+        (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = jest.fn().mockResolvedValue(undefined);
+        return job;
+      };
+
+      beforeEach(() => {
+        mockFetch.mockResolvedValue({ ok: true, status: 200 });
+        outbox.currentMessagePayload.mockResolvedValue(undefined);
+        messages = { find: jest.fn() };
+        processor = new WebhookProcessor(
+          repo as unknown as Repository<Webhook>,
+          failureRepo as unknown as Repository<WebhookDeliveryFailure>,
+          hookManager as unknown as HookManager,
+          configService as unknown as ConfigService,
+          outbox as unknown as WebhookOutboxService,
+          messages as unknown as Repository<Message>,
+        );
+      });
+
+      it.each([
+        ['a message delivery', 'message.received', queuedData],
+        ['an edit event', 'message.edited', { messageId: 'M-1', chatId: '628111@c.us', body: 'edited text' }],
+      ] as const)('withholds %s once the message row was taken back', async (_label, event, data) => {
+        messages.find.mockResolvedValue([stored({ type: 'revoked', body: '' })]);
+
+        const result = await processor.process(marked(event, data));
+
+        expect(messages.find).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { sessionId: 'sess-1', waMessageId: 'M-1' } }),
+        );
+        expect(result.success).toBe(false);
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(failureRepo.insert).not.toHaveBeenCalled();
+      });
+
+      it('sends the stored text once an edit marked the message row', async () => {
+        messages.find.mockResolvedValue([stored({ body: 'edited text', metadata: { edited: true } })]);
+
+        await processor.process(marked());
+
+        expect(sentBody().data).toMatchObject({ id: 'M-1', body: 'edited text' });
+      });
+
+      it.each([
+        ['no row of the message', []],
+        [
+          'only an edited row of another chat',
+          [stored({ chatId: '628999@c.us', body: 'x', metadata: { edited: true } })],
+        ],
+        ['a row no change reached', [stored({})]],
+        ['a row an edit marked with the text it holds', [stored({ metadata: { edited: true } })]],
+      ] as const)('sends what it holds with %s', async (_label, rows) => {
+        messages.find.mockResolvedValue(rows);
+
+        await processor.process(marked());
+
+        expect(sentBody().data).toMatchObject({ body: 'first text' });
+      });
+
+      // An own send to a contact named by lid is filed under the phone, while its message.sent names the lid.
+      describe('of an own send whose row is filed under the phone while the delivery names the lid', () => {
+        const LID = '999555@lid';
+        const PHONE = '628111@s.whatsapp.net';
+        const sent = {
+          id: 'M-1',
+          chatId: LID,
+          from: '628000@s.whatsapp.net',
+          to: LID,
+          fromMe: true,
+          body: 'first text',
+        };
+        const own = (row: Record<string, unknown>) =>
+          stored({ chatId: PHONE, from: '628000@s.whatsapp.net', to: PHONE, direction: 'outgoing', ...row });
+        const paired = (pair: boolean): void => {
+          processor = new WebhookProcessor(
+            repo as unknown as Repository<Webhook>,
+            failureRepo as unknown as Repository<WebhookDeliveryFailure>,
+            hookManager as unknown as HookManager,
+            configService as unknown as ConfigService,
+            outbox as unknown as WebhookOutboxService,
+            messages as unknown as Repository<Message>,
+            {
+              findPhoneForLid: (jid: string) => Promise.resolve(pair && jid === LID ? '628111' : null),
+            } as unknown as LidMappingStoreService,
+          );
+        };
+
+        it.each([true, false])('withholds it once that row was taken back (pair reported: %s)', async pair => {
+          paired(pair);
+          messages.find.mockResolvedValue([own({ type: 'revoked', body: '' })]);
+
+          await processor.process(marked('message.sent', sent));
+
+          expect(mockFetch).not.toHaveBeenCalled();
+        });
+
+        it('sends the stored text of an edit when the pair is reported', async () => {
+          paired(true);
+          messages.find.mockResolvedValue([own({ body: 'edited text', metadata: { edited: true } })]);
+
+          await processor.process(marked('message.sent', sent));
+
+          expect(sentBody().data).toMatchObject({ id: 'M-1', body: 'edited text' });
+        });
+
+        it('sends what it holds of an edit while no pair is reported, as for any row not judged its own', async () => {
+          paired(false);
+          messages.find.mockResolvedValue([own({ body: 'edited text', metadata: { edited: true } })]);
+
+          await processor.process(marked('message.sent', sent));
+
+          expect(sentBody().data).toMatchObject({ body: 'first text' });
+        });
+      });
+
+      it('judges by the chat the engine reported of a row a handler moved', async () => {
+        messages.find.mockResolvedValue([
+          stored({ chatId: '628777@c.us', engineRef: { chatId: '628111@c.us' }, type: 'revoked' }),
+        ]);
+
+        await processor.process(marked());
+
+        expect(mockFetch).not.toHaveBeenCalled();
+      });
+
+      it('waits, spending no attempt, while the message row cannot be read', async () => {
+        messages.find.mockRejectedValue(new Error('connection terminated'));
+        const job = marked();
+
+        await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+        expect(mockFetch).not.toHaveBeenCalled();
+      });
+
+      // The hold is a lease the queuing node renews: its age must be told by one clock, never one node's against another's.
+      describe("a hold the node that queued it keeps, read by a worker whose clock is not the writer's", () => {
+        const T = 1_800_000_000_000;
+        // Redis's own clock, and the leases it keeps by key, each until the time it says.
+        let redisNow: number;
+        let leases: Map<string, number>;
+        let job: Job<WebhookJobData>;
+        let queue: Record<string, unknown>;
+        let writer: WebhookDeliveryService;
+        const redis = {
+          set: jest.fn((key: string, _value: string, options: { PX: number }) => {
+            leases.set(key, redisNow + options.PX);
+            return Promise.resolve('OK');
+          }),
+          del: jest.fn((key: string) => Promise.resolve(Number(leases.delete(key)))),
+          get: jest.fn((key: string) => Promise.resolve((leases.get(key) ?? -Infinity) > redisNow ? '1' : null)),
+        };
+        const clock = (ms: number) => jest.spyOn(Date, 'now').mockReturnValue(ms);
+        const settle = async (): Promise<void> => {
+          for (let i = 0; i < 30; i++) await new Promise(resolve => setImmediate(resolve));
+        };
+
+        beforeEach(async () => {
+          redisNow = 5_000_000;
+          leases = new Map();
+          // No row says anything of the message: a worker that does not honour the lease sends what the job holds.
+          messages.find.mockResolvedValue([]);
+          job = marked();
+          (job as unknown as { getState: () => Promise<string> }).getState = () => Promise.resolve('delayed');
+          (job as unknown as { updateData: (data: WebhookJobData) => Promise<void> }).updateData = data => {
+            job.data = data;
+            return Promise.resolve();
+          };
+          queue = {
+            toKey: (type: string) => `bull:webhook:${type}`,
+            getBackend: () => ({ client: Promise.resolve(redis) }),
+            waitUntilReady: () => Promise.resolve(),
+            getJob: () => Promise.resolve(job),
+          };
+          writer = new WebhookDeliveryService(
+            {} as never,
+            {} as never,
+            { get: (key: string, def?: unknown) => (key === 'queue.enabled' ? true : def) } as unknown as ConfigService,
+            new HookManager(),
+            {
+              onQueuedCopyChanged: jest.fn(),
+              queuedCopiesOf: () => [['d', false]],
+              holdMessage: jest.fn(),
+            } as unknown as WebhookOutboxService,
+            undefined,
+            queue as never,
+          );
+          processor = new WebhookProcessor(
+            repo as unknown as Repository<Webhook>,
+            failureRepo as unknown as Repository<WebhookDeliveryFailure>,
+            hookManager as unknown as HookManager,
+            configService as unknown as ConfigService,
+            outbox as unknown as WebhookOutboxService,
+            messages as unknown as Repository<Message>,
+            undefined,
+            queue as never,
+          );
+          clock(T);
+          writer.holdMessage('sess-1', 'M-1', 'revoke');
+          await settle();
+        });
+
+        afterEach(async () => {
+          jest.restoreAllMocks();
+          await writer.onModuleDestroy();
+        });
+
+        it("honours a live lease while the worker's clock runs 120 s ahead of the writer's", async () => {
+          redisNow += 1_000;
+          clock(T + 120_000);
+
+          await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+          expect(mockFetch).not.toHaveBeenCalled();
+        });
+
+        it("does not honour a lease that ran out while the worker's clock runs 120 s behind the writer's", async () => {
+          redisNow += 61_000;
+          clock(T - 120_000);
+          messages.find.mockResolvedValue([stored({ type: 'revoked', body: '' })]);
+
+          await processor.process(job, 'tok');
+
+          expect(messages.find).toHaveBeenCalled();
+          expect(mockFetch).not.toHaveBeenCalled();
+        });
+      });
+
+      describe('with what the node that queued it wrote into the job', () => {
+        const withMark = (mark: Partial<WebhookJobData>): Job<WebhookJobData> => {
+          const job = marked();
+          Object.assign(job.data, mark);
+          return job;
+        };
+
+        it('sends nothing once that node wrote the copy withdrawn, reading no row', async () => {
+          const result = await processor.process(withMark({ unwrittenChange: null }));
+
+          expect(result.success).toBe(false);
+          expect(mockFetch).not.toHaveBeenCalled();
+          expect(messages.find).not.toHaveBeenCalled();
+        });
+
+        it('sends the copy as that node wrote it, the placeholder of a delete through the API included', async () => {
+          await processor.process(withMark({ unwrittenChange: { ...queuedData, type: 'revoked', body: '' } }));
+
+          expect(sentBody().data).toMatchObject({ id: 'M-1', type: 'revoked', body: '' });
+          expect(messages.find).not.toHaveBeenCalled();
+        });
+
+        describe('and the lease it keeps in Redis', () => {
+          let lease: jest.Mock;
+          beforeEach(() => {
+            lease = jest.fn().mockResolvedValue(null);
+            processor = new WebhookProcessor(
+              repo as unknown as Repository<Webhook>,
+              failureRepo as unknown as Repository<WebhookDeliveryFailure>,
+              hookManager as unknown as HookManager,
+              configService as unknown as ConfigService,
+              outbox as unknown as WebhookOutboxService,
+              messages as unknown as Repository<Message>,
+              undefined,
+              {
+                toKey: (type: string) => `bull:webhook:${type}`,
+                getBackend: () => ({ client: Promise.resolve({ get: lease }) }),
+              } as never,
+            );
+          });
+
+          it('waits, spending no attempt, while that node keeps a change of the message', async () => {
+            lease.mockResolvedValue('1');
+
+            await expect(processor.process(marked(), 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+            expect(lease).toHaveBeenCalledWith('bull:webhook:held:d');
+            expect(mockFetch).not.toHaveBeenCalled();
+            expect(messages.find).not.toHaveBeenCalled();
+          });
+
+          it('waits while that node keeps a change, though it wrote what an earlier change left of the copy', async () => {
+            lease.mockResolvedValue('1');
+
+            await expect(
+              processor.process(withMark({ unwrittenChange: { ...queuedData, type: 'revoked', body: '' } }), 'tok'),
+            ).rejects.toBeInstanceOf(DelayedError);
+
+            expect(mockFetch).not.toHaveBeenCalled();
+          });
+
+          it('sends nothing of a withdrawn copy, held or not, reading no lease', async () => {
+            lease.mockResolvedValue('1');
+
+            await processor.process(withMark({ unwrittenChange: null }));
+
+            expect(mockFetch).not.toHaveBeenCalled();
+            expect(lease).not.toHaveBeenCalled();
+          });
+
+          it('reads the message row once no lease is kept (a node that stopped renewing it)', async () => {
+            messages.find.mockResolvedValue([stored({ type: 'revoked', body: '' })]);
+
+            await processor.process(marked());
+
+            expect(messages.find).toHaveBeenCalled();
+            expect(mockFetch).not.toHaveBeenCalled();
+          });
+
+          it('waits, spending no attempt and sending nothing, while Redis cannot tell whether a lease is kept', async () => {
+            lease.mockRejectedValue(new Error('Connection is closed.'));
+            // A row no change reached: a worker that went past the lease would read it and send the job.
+            messages.find.mockResolvedValue([stored({})]);
+
+            await expect(processor.process(marked(), 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+            expect(mockFetch).not.toHaveBeenCalled();
+            expect(messages.find).not.toHaveBeenCalled();
+            expect(failureRepo.insert).not.toHaveBeenCalled();
+          });
+        });
+      });
+
+      it('reads no message row for a job that carries no mark', async () => {
+        await processor.process(queuedJob());
+
+        expect(messages.find).not.toHaveBeenCalled();
+      });
+    });
+
+    it('completes a job whose message was taken back without posting or filing a dead-letter row', async () => {
+      outbox.currentMessagePayload.mockResolvedValue(null);
+
+      const result = await processor.process(queuedJob(2));
+
+      expect(outbox.currentMessagePayload).toHaveBeenCalledWith('wh-1', 'k', 'message.received');
+      expect(outbox.forgetUnwritten).toHaveBeenCalledWith('wh-1', 'k');
+      expect(result.success).toBe(false);
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(failureRepo.insert).not.toHaveBeenCalled();
+      expect(hookManager.execute).not.toHaveBeenCalled();
+    });
+
+    it("rebuilds the body from the row's current data, signed over its own bytes under the job's key", async () => {
+      repo.findOne.mockResolvedValue({
+        id: 'wh-1',
+        active: true,
+        sessionId: 'sess-1',
+        url: 'https://8.8.8.8/hook',
+        events: ['*'],
+        secret: 'current-secret',
+      });
+      outbox.currentMessagePayload.mockResolvedValue(rowData);
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+      await processor.process(queuedJob());
+
+      const before = (hookManager.execute.mock.calls as Array<[string, { payload: { data: unknown } }]>).find(
+        ([hook]) => hook === 'webhook:before',
+      );
+      expect(before?.[1].payload.data).toEqual(rowData);
+      expect(sentBody()).toMatchObject({ data: rowData, idempotencyKey: 'k', deliveryId: 'd' });
+      const [, init] = mockFetch.mock.calls[0] as [string, { body: string; headers: Record<string, string> }];
+      expect(init.headers['X-OpenWA-Signature']).toBe(
+        `sha256=${createHmac('sha256', 'current-secret').update(init.body).digest('hex')}`,
+      );
+    });
+
+    it('posts the queued body as it is when the row still holds the data it was queued with', async () => {
+      outbox.currentMessagePayload.mockResolvedValue({ ...queuedData });
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+      await processor.process(queuedJob());
+
+      expect(hookManager.execute).not.toHaveBeenCalledWith('webhook:before', expect.anything(), expect.anything());
+      expect(sentBody().data).toEqual(queuedData);
+    });
+
+    it('posts a job queued without a hash as it is, unless its message was taken back', async () => {
+      outbox.currentMessagePayload.mockResolvedValue(rowData);
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+      const job = makeJob();
+      job.data.payload.data = { ...queuedData };
+
+      await processor.process(job);
+      expect(sentBody().data).toEqual(queuedData);
+
+      mockFetch.mockClear();
+      outbox.currentMessagePayload.mockResolvedValue(null);
+      await processor.process(makeJob());
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('delays a job whose outbox row cannot be read, spending no attempt', async () => {
+      outbox.currentMessagePayload.mockRejectedValue(new Error('connection terminated'));
+      const job = queuedJob(2);
+      const move = jest.fn().mockResolvedValue(undefined);
+      (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = move;
+
+      await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+      expect(move).toHaveBeenCalledWith(expect.any(Number), 'tok');
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(failureRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('delays a job, spending no attempt, while a change of its message is kept on this node', async () => {
+      outbox.currentMessagePayload.mockResolvedValue(rowData);
+      outbox.isMessageHeld.mockImplementation((key: string, webhookId: string) => key === 'k' && webhookId === 'wh-1');
+      const job = queuedJob(2);
+      const move = jest.fn().mockResolvedValue(undefined);
+      (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = move;
+
+      await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+      expect(move).toHaveBeenCalledWith(expect.any(Number), 'tok');
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(failureRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['the message the job carries', { messageId: 'M-1' }, undefined, undefined],
+      ['the message its outbox row names, for a job queued without it', {}, { messageId: 'M-1' }, undefined],
+      ['the message its kept copy names, for a job queued without it', {}, undefined, { messageId: 'M-1' }],
+    ] as const)(
+      'matches the hold of an edit event by %s, never by the body a hook rewrote',
+      async (_label, carried, row, replayData) => {
+        outbox.currentMessagePayload.mockResolvedValue(row);
+        const job = makeJob({ event: 'message.edited', ...carried, ...(replayData ? { replayData } : {}) }, 2);
+        job.data.payload = { ...job.data.payload, event: 'message.edited', data: { messageId: 'renamed' } };
+        (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = jest.fn().mockResolvedValue(undefined);
+        outbox.isMessageHeld.mockImplementation(
+          (_key: string, _webhookId: string, delivery: { data?: { messageId?: string } }) =>
+            delivery.data?.messageId === 'M-1',
+        );
+
+        await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+        expect(mockFetch).not.toHaveBeenCalled();
+      },
+    );
+
+    it('closes the row and posts nothing when a plugin cancels the rebuilt delivery', async () => {
+      outbox.currentMessagePayload.mockResolvedValue(rowData);
+      hookManager.execute.mockResolvedValue({ continue: false, data: {} });
+
+      await processor.process(queuedJob());
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
+    });
+
+    it('records a rebuilt body over the size cap as undelivered and closes the row', async () => {
+      configService.get.mockImplementation((key: string, def?: unknown) =>
+        key === 'webhook.maxPayloadBytes' ? 10 : key === 'webhook.timeout' ? 25000 : def,
+      );
+      outbox.currentMessagePayload.mockResolvedValue(rowData);
+
+      await processor.process(queuedJob());
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(failureRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ attempts: 0 }));
+      expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
+    });
+
+    it('delays the job when the rebuilt body is refused and the refusal cannot be recorded', async () => {
+      configService.get.mockImplementation((key: string, def?: unknown) =>
+        key === 'webhook.maxPayloadBytes' ? 10 : key === 'webhook.timeout' ? 25000 : def,
+      );
+      outbox.currentMessagePayload.mockResolvedValue(rowData);
+      failureRepo.insert.mockRejectedValue(new Error('disk unavailable'));
+      const job = queuedJob();
+      const move = jest.fn().mockResolvedValue(undefined);
+      (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = move;
+
+      await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+      expect(outbox.close).not.toHaveBeenCalled();
+    });
+
+    // Queued where its outbox row could not be written, its copy then dropped by the bound of the copies with no content.
+    describe('of a job queued with no outbox row whose kept copy a bound dropped', () => {
+      let kept: WebhookOutboxService;
+      const queued = (): Job<WebhookJobData> => {
+        const job = makeJob({ baseHash: dataHash(queuedData), replayData: queuedData, unwritten: queuedData });
+        job.data.payload = { ...job.data.payload, data: { ...queuedData } };
+        (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = jest.fn().mockResolvedValue(undefined);
+        return job;
+      };
+      /** The copy is kept and queued as job `d`, then newer copies whose identity alone is 1 MiB push it out. */
+      const dropCopy = (): void => {
+        kept.holdUnwritten([
+          {
+            webhookId: 'wh-1',
+            sessionId: 'sess-1',
+            event: 'message.received',
+            idempotencyKey: 'k',
+            deliveryId: 'd',
+            payload: { ...queuedData },
+          },
+        ]);
+        kept.queuedUnwritten('wh-1', 'k', 'd');
+        kept.holdUnwritten(
+          Array.from({ length: 90 }, (_, i) => ({
+            webhookId: 'other',
+            sessionId: 'other',
+            event: 'message.received',
+            idempotencyKey: `msg_other_P-${i}_other`,
+            deliveryId: `p${i}`,
+            payload: { id: `P-${i}`, author: `${'a'.repeat(1024 * 1024)}${i}` },
+          })),
+        );
+      };
+      const recorded = (): Record<string, unknown> =>
+        (failureRepo.insert.mock.calls as Array<[Record<string, unknown>]>)[0]?.[0];
+
+      beforeEach(() => {
+        jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+        jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+        mockFetch.mockResolvedValue({ ok: true, status: 200 });
+        configService.get.mockImplementation((key: string, def?: unknown) =>
+          key === 'webhook.failurePayloadRetentionHours' ? 24 : def,
+        );
+        kept = new WebhookOutboxService({ findOne: () => Promise.resolve(null) } as never);
+        processor = new WebhookProcessor(
+          repo as unknown as Repository<Webhook>,
+          failureRepo as unknown as Repository<WebhookDeliveryFailure>,
+          hookManager as unknown as HookManager,
+          configService as unknown as ConfigService,
+          kept,
+        );
+      });
+
+      it.each([
+        ['no change came', (): Promise<void> => Promise.resolve(), queuedData],
+        [
+          'a revoke came after',
+          (): Promise<void> => kept.changeUnwrittenForMessage('sess-1', 'M-1', { kind: 'close' }),
+          undefined,
+        ],
+      ] as const)('sends nothing and records it as failed when %s', async (_label, change, payload) => {
+        dropCopy();
+        await change();
+
+        const result = await processor.process(queued());
+
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(result.success).toBe(false);
+        expect(recorded()).toMatchObject({ webhookId: 'wh-1', idempotencyKey: 'k', deliveryId: 'd', attempts: 1 });
+        if (payload) expect(recorded()).toMatchObject({ payload });
+        else expect(recorded()).not.toHaveProperty('payload');
+        expect(kept.hasUnwritten('wh-1', 'k')).toBe(false);
+      });
+
+      it('keeps none of its data on the failure row while payload retention is off here', async () => {
+        // Queued by a node with retention on, so the job carries its data.
+        configService.get.mockImplementation((key: string, def?: unknown) =>
+          key === 'webhook.failurePayloadRetentionHours' ? 0 : def,
+        );
+        dropCopy();
+
+        await processor.process(queued());
+
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(recorded()).toMatchObject({ webhookId: 'wh-1', idempotencyKey: 'k' });
+        expect(recorded()).not.toHaveProperty('payload');
+      });
+
+      it('waits without spending an attempt while the failure cannot be recorded', async () => {
+        dropCopy();
+        failureRepo.count.mockRejectedValueOnce(new Error('SQLITE_IOERR: disk I/O error'));
+        const job = queued();
+
+        await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(kept.hasUnwritten('wh-1', 'k')).toBe(true);
+      });
+
+      it.each([
+        ['with its data', 'kept', queuedData],
+        ['with none of it once a change of its message came after', 'taken', undefined],
+      ] as const)(
+        'sends nothing and records it as failed %s, run where the node that queued it wrote the copy dropped',
+        async (_label, lost, payload) => {
+          const job = queued();
+          Object.assign(job.data, { unwrittenLost: lost });
+
+          const result = await processor.process(job);
+
+          expect(mockFetch).not.toHaveBeenCalled();
+          expect(result.success).toBe(false);
+          if (payload) expect(recorded()).toMatchObject({ payload });
+          else expect(recorded()).not.toHaveProperty('payload');
+        },
+      );
+    });
+
+    describe('the copy a terminal failure keeps for a redrive', () => {
+      beforeEach(() => {
+        configService.get.mockImplementation((key: string, def?: unknown) =>
+          key === 'webhook.failurePayloadRetentionHours' ? 24 : key === 'webhook.timeout' ? 25000 : def,
+        );
+        mockFetch.mockResolvedValue({ ok: false, status: 503, statusText: 'Unavailable' });
+      });
+
+      it('is what the row holds when the attempt fails, not what the job was queued with', async () => {
+        // Unchanged before the POST, edited while it was out.
+        outbox.currentMessagePayload.mockResolvedValueOnce({ ...queuedData }).mockResolvedValueOnce(rowData);
+
+        await expect(processor.process(queuedJob(2))).rejects.toThrow('HTTP 503');
+
+        expect(failureRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ attempts: 3, payload: rowData }));
+      });
+
+      it('is none once the message was taken back while the POST was out', async () => {
+        outbox.currentMessagePayload.mockResolvedValueOnce({ ...queuedData }).mockResolvedValueOnce(null);
+
+        await expect(processor.process(queuedJob(2))).rejects.toThrow('HTTP 503');
+
+        expect((failureRepo.insert.mock.calls as unknown[][])[0][0]).not.toHaveProperty('payload');
+      });
+
+      it("is the job's copy when the row cannot be read then", async () => {
+        outbox.currentMessagePayload
+          .mockResolvedValueOnce({ ...queuedData })
+          .mockRejectedValueOnce(new Error('connection terminated'));
+
+        await expect(processor.process(queuedJob(2))).rejects.toThrow('HTTP 503');
+
+        expect(failureRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ payload: queuedData }));
+      });
+
+      it('is what the row holds for a job that stalled past the limit', async () => {
+        outbox.currentMessagePayload.mockResolvedValue(rowData);
+
+        await processor.onWorkerFailed(
+          Object.assign(queuedJob(1), { deferredFailure: 'job stalled more than allowable limit' }),
+          new Error('job stalled more than allowable limit'),
+        );
+
+        expect(failureRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ payload: rowData }));
+      });
     });
   });
 

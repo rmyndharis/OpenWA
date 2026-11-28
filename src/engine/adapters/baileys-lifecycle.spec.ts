@@ -46,13 +46,16 @@ describe('BaileysLifecycle unlink cleanup', () => {
   function lifecycle() {
     const noCallback = (): undefined => undefined;
     const fenceStoredWrites = jest.fn();
-    const messageStore = { clearSession: jest.fn().mockResolvedValue(undefined) };
+    const messageStore = { clearSession: jest.fn().mockResolvedValue(undefined), hideUpTo: jest.fn() };
+    const chatStateStore = { clearSession: jest.fn().mockResolvedValue(undefined), hideUpTo: jest.fn() };
+    const onStoredAccountWipeRefused = jest.fn();
     const host = {
       authPath: '/nonexistent/openwa-lifecycle-spec/session-sess-1',
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
-      config: { sessionId: 'sess-1', dbSessionId: 'db-1', messageStore },
+      config: { sessionId: 'sess-1', dbSessionId: 'db-1', messageStore, chatStateStore },
       liveCalls: new Map(),
       fenceStoredWrites,
+      onStoredAccountWipeRefused,
       getOnStateChanged: noCallback,
       getOnDisconnected: noCallback,
       getOnError: noCallback,
@@ -67,8 +70,29 @@ describe('BaileysLifecycle unlink cleanup', () => {
     };
     const engine = new BaileysLifecycle(host);
     engine.sock = sock as unknown as BaileysLifecycle['sock'];
-    return { engine, fenceStoredWrites, clearSession: messageStore.clearSession };
+    return {
+      engine,
+      fenceStoredWrites,
+      clearSession: messageStore.clearSession,
+      messageStore,
+      chatStateStore,
+      onStoredAccountWipeRefused,
+    };
   }
+
+  it('hides the rows of both stores up to the time of a clear the database refused, and keeps the clear', async () => {
+    const { engine, messageStore, chatStateStore, onStoredAccountWipeRefused } = lifecycle();
+    chatStateStore.clearSession.mockRejectedValueOnce(
+      Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }),
+    );
+
+    await engine.logout();
+
+    expect(onStoredAccountWipeRefused).toHaveBeenCalledTimes(1);
+    const [[cutoff]] = onStoredAccountWipeRefused.mock.calls as Array<[Date]>;
+    expect(messageStore.hideUpTo).toHaveBeenCalledWith('db-1', cutoff);
+    expect(chatStateStore.hideUpTo).toHaveBeenCalledWith('sess-1', cutoff);
+  });
 
   // A message still being processed must not recreate a row of the unlinked account after its store
   // is wiped, so the store writes are fenced first.

@@ -1,9 +1,11 @@
-import { Injectable, BadRequestException, Optional } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { markEngineSendFailure } from '../../common/errors/engine-send-failure';
+import { markNothingSent } from '../../common/errors/engine-not-sent.error';
+import { handOverSend, isHandOverRefusal } from './idempotency/run-idempotent-send';
 import { mergeSentMetadata, updateMessageMetadata } from './message-metadata';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository, QueryDeepPartialEntity } from 'typeorm';
+import { In, IsNull, LessThan, Not, Repository, QueryDeepPartialEntity, type FindOptionsSelect } from 'typeorm';
 import { SessionService, linkPreviewDefault } from '../session/session.service';
 import { MessageProjector } from '../session/message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -19,7 +21,7 @@ import {
   IWhatsAppEngine,
   MessageResult,
 } from '../../engine/interfaces/whatsapp-engine.interface';
-import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
+import { Message, MessageDirection, MessageEngineRef, MessageStatus } from './entities/message.entity';
 import { HookManager, applySendingGate } from '../../core/hooks';
 import { SendPacingService, SettleAdmission, countsTowardSendBreaker } from './send-pacing.service';
 import { TemplateService } from '../template/template.service';
@@ -33,6 +35,14 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 import { MEDIA_MESSAGE_TYPES, OMITTED_MEDIA } from '../session/message-row.mapper';
+import { provablyDifferent } from '../session/message-mutation-guard';
+import { engineChatOf } from './engine-chat-of';
+import {
+  type RecoveryLoss,
+  type RecoveryQueue,
+  type RecoveryRecord,
+  sendRerunKey,
+} from '../../common/utils/recovery-queue';
 
 /**
  * Outbound statuses whose media is eligible for archiving. An echo row merged after a fast ack can
@@ -57,6 +67,108 @@ function isUrlPointerMetadata(metadata: Record<string, unknown> | undefined): bo
   const data = (metadata as { media?: { data?: unknown } } | undefined)?.media?.data;
   return typeof data === 'string' && /^https?:\/\//i.test(data);
 }
+
+/**
+ * The engine ref of a send's row filed under `filed` that the engine delivered to `engineChatId`, when that is another
+ * chat (the contact's LID, for a send addressed by phone number): the row keeps the chat its caller addressed, and a
+ * change naming the delivered one is judged by that ref.
+ */
+function addressedRef(filed: string, engineChatId: string | undefined): MessageEngineRef | undefined {
+  return engineChatId && provablyDifferent(filed, engineChatId)
+    ? { chatId: engineChatId, direction: MessageDirection.OUTGOING, addressed: true }
+    : undefined;
+}
+
+/** Columns a sender changed in memory after its PENDING insert (see MessageSendService.persistSentState). */
+type ChangedColumns = Pick<QueryDeepPartialEntity<Message>, 'body' | 'metadata' | 'chatId' | 'to'>;
+
+/**
+ * A SENT write of a send the engine accepted that the database refused, kept to run again: the row's own update for a
+ * single send (its PENDING row holds the media), or the whole insert of a bulk item, which no row holds yet.
+ */
+type SentWrite =
+  | {
+      kind: 'update';
+      sessionId: string;
+      rowId: string;
+      result: Pick<MessageResult, 'id' | 'timestamp'>;
+      changed: ChangedColumns;
+      engineRef?: MessageEngineRef;
+    }
+  | { kind: 'insert'; sessionId: string; data: SaveOutgoingMessageData };
+
+const isSentWrite = (value: unknown): value is SentWrite => {
+  const write = value as Partial<SentWrite> | null;
+  if (typeof write !== 'object' || write === null || typeof write.sessionId !== 'string') return false;
+  if (write.kind === 'insert') return typeof write.data?.waMessageId === 'string';
+  return write.kind === 'update' && typeof write.rowId === 'string' && typeof write.result?.id === 'string';
+};
+
+/** The key of a SENT write in the recovery queue's send lane: its message id, which a change of it names. */
+const sentWriteKey = (write: SentWrite): string =>
+  write.kind === 'insert'
+    ? sendRerunKey(write.sessionId, write.data.waMessageId!)
+    : write.result.id
+      ? sendRerunKey(write.sessionId, write.result.id)
+      : `${write.sessionId}#${write.rowId}`;
+
+/** The patch a send's SENT write makes to its PENDING row. */
+const sentPatch = (
+  changed: ChangedColumns,
+  result: Pick<MessageResult, 'id' | 'timestamp'>,
+  engineRef: MessageEngineRef | undefined,
+): QueryDeepPartialEntity<Message> => ({
+  ...changed,
+  ...(result.id ? { waMessageId: result.id } : {}),
+  status: MessageStatus.SENT,
+  timestamp: result.timestamp,
+  ...(engineRef ? { engineRef } : {}),
+});
+
+/** A {@link SentWrite} in the recovery queue's send lane, which a pass runs before the changes kept for messages. */
+class SentRerun implements RecoveryRecord {
+  readonly lane = 'send' as const;
+  readonly sessionId: string;
+  private readonly size: number;
+
+  constructor(
+    readonly write: SentWrite,
+    readonly since: number,
+    private readonly owner: {
+      rerunSentWrite(write: SentWrite): Promise<boolean>;
+      sentWriteGone(write: SentWrite, loss?: RecoveryLoss): void;
+    },
+  ) {
+    this.sessionId = write.sessionId;
+    this.size = JSON.stringify(write).length;
+  }
+
+  bytes(): number {
+    return this.size;
+  }
+
+  ageCapped(): boolean {
+    return true;
+  }
+
+  retry(): Promise<boolean> {
+    return this.owner.rerunSentWrite(this.write);
+  }
+
+  lost(reason: RecoveryLoss): void {
+    this.owner.sentWriteGone(this.write, reason);
+  }
+
+  dropped(): void {
+    this.owner.sentWriteGone(this.write);
+  }
+}
+
+/** The row of an API send kept beside the own-send echo's row that took its message id (see Message.echoOf). */
+type EchoTwin = Pick<Message, 'id' | 'sessionId' | 'chatId' | 'metadata' | 'timestamp'> & {
+  echoOf: string;
+  engineRef?: MessageEngineRef | null;
+};
 
 /**
  * Asking to suppress the preview AND to attach one is a contradiction, and guessing which half
@@ -86,6 +198,14 @@ export interface SaveOutgoingMessageData {
    * '', which the preview renders as an empty box.
    */
   quotedMessageId?: string;
+  /**
+   * The id the engine addressed, when its number lookup answered another id than `chatId` names: the number
+   * WhatsApp holds, or the contact's lid (see MessageResult.resolvedChatId). The row is filed under it. When the own-send echo wrote its row first, that
+   * row is moved under it.
+   */
+  resolvedChatId?: string;
+  /** The chat the engine delivered the message to (see MessageResult.engineChatId). */
+  engineChatId?: string;
 }
 
 /**
@@ -106,6 +226,10 @@ export interface SaveOutgoingMessageData {
 @Injectable()
 export class MessageSendService {
   private readonly logger = createLogger('MessageSend');
+  // The queue the projector keeps what the database refused in: its send lane holds the SENT writes kept to run again.
+  private readonly recovery?: RecoveryQueue;
+  // The rows whose SENT write is kept to run again: the pending reaper leaves them alone meanwhile.
+  private readonly rerunRows = new Set<string>();
 
   constructor(
     @InjectRepository(Message, 'data')
@@ -131,7 +255,18 @@ export class MessageSendService {
     // sent while the quoted message's `message:received` hooks still run stores an empty quote.
     @Optional()
     private readonly messageProjector?: MessageProjector,
-  ) {}
+  ) {
+    // Registered as the service is built, before the queue's first pass: what the last process kept comes back first.
+    this.recovery = this.messageProjector?.recoveryQueue?.();
+    this.recovery?.register('send', {
+      encode: record => ({ since: record.since, write: (record as SentRerun).write }),
+      decode: (_key, value) => {
+        const kept = value as { since?: unknown; write?: unknown } | null;
+        if (typeof kept?.since !== 'number' || !isSentWrite(kept.write)) return undefined;
+        return this.sentRerun(kept.write, kept.since);
+      },
+    });
+  }
 
   sendText(sessionId: string, dto: SendTextMessageDto): Promise<MessageResponseDto> {
     return this.sendTextInternal(sessionId, dto, this.isInitiatedDuringMessageSent());
@@ -152,6 +287,8 @@ export class MessageSendService {
     initiatedDuringMessageSent: boolean,
     invoke: () => Promise<MessageResult>,
   ): Promise<MessageResult> {
+    // Every sender reaches the engine here, so a keyed send's claim records the hand-over at this one point.
+    await handOverSend();
     if (!initiatedDuringMessageSent) {
       return invoke();
     }
@@ -310,6 +447,9 @@ export class MessageSendService {
       lifetime.assertCurrent();
       persisted = true;
       return { finalDto, engine, prepared, message, sessionLinkPreview, initiatedDuringMessageSent };
+    } catch (error) {
+      // Nothing was handed to the engine yet, whatever failed: a keyed send frees its key for it.
+      throw markNothingSent(error);
     } finally {
       release?.(persisted);
       lifetime.close();
@@ -330,6 +470,13 @@ export class MessageSendService {
     input: unknown,
     error: unknown,
   ): Promise<never> {
+    // A keyed send whose claim refused the hand-over never reached the engine: nothing failed there to record or tell
+    // plugins about. Its row is failed at once all the same, not left PENDING for the reaper; a database that refuses
+    // this write as well leaves it to the reaper.
+    if (isHandOverRefusal(error)) {
+      await this.saveFailedMessage(message).catch(() => undefined);
+      throw error;
+    }
     try {
       // Only failures that say something about the account's standing feed the breaker: adapters also
       // raise client-fault and engine-state errors from inside this call (a blocked media URL, an
@@ -388,10 +535,14 @@ export class MessageSendService {
    */
   async sendTemplate(sessionId: string, dto: SendTemplateMessageDto): Promise<MessageResponseDto> {
     const initiatedDuringMessageSent = this.isInitiatedDuringMessageSent();
-    const template = await this.templateService.resolve(sessionId, {
-      templateId: dto.templateId,
-      templateName: dto.templateName,
-    });
+    const template = await this.templateService
+      .resolve(sessionId, {
+        templateId: dto.templateId,
+        templateName: dto.templateName,
+      })
+      .catch((error: unknown) => {
+        throw markNothingSent(error);
+      });
 
     const vars = dto.vars ?? {};
     const parts = [template.header, template.body, template.footer].filter(
@@ -744,14 +895,21 @@ export class MessageSendService {
       },
     );
 
+    // The reply goes where a send to the caller's chat goes; only the check that the quoted message is in that chat
+    // takes the chat an API send it quotes was delivered to.
+    const quotedChatId = await this.engineChatOf(sessionId, finalDto.chatId, finalDto.quotedMessageId);
     let result: MessageResult;
     try {
       // Widened only as far as the caller asked, exactly like the send path: a reply with no tags
       // keeps its three-argument shape.
       result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
-        finalDto.mentions?.length
-          ? engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text, finalDto.mentions)
-          : engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text),
+        quotedChatId !== finalDto.chatId
+          ? engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text, finalDto.mentions, {
+              quotedChatId,
+            })
+          : finalDto.mentions?.length
+            ? engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text, finalDto.mentions)
+            : engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text),
       );
     } catch (error) {
       return this.failSend(sessionId, 'reply', message, finalDto, error);
@@ -826,10 +984,12 @@ export class MessageSendService {
       }),
     );
 
+    // Only the engine's check of the forwarded message takes the chat an API send was delivered to.
+    const fromChatId = await this.engineChatOf(sessionId, finalDto.fromChatId, finalDto.messageId);
     let result: MessageResult;
     try {
       result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
-        engine.forwardMessage(finalDto.fromChatId, finalDto.toChatId, finalDto.messageId),
+        engine.forwardMessage(fromChatId, finalDto.toChatId, finalDto.messageId),
       );
     } catch (error) {
       return this.failSend(sessionId, 'forward', message, finalDto, error);
@@ -837,6 +997,20 @@ export class MessageSendService {
     // persistSentState preserves the empty-id rule: a forward whose engine couldn't recover the sent
     // copy's id leaves waMessageId NULL so no ack mis-matches it.
     return this.persistSentState(message, result);
+  }
+
+  /** The chat the engine acts on the message in (see engineChatOf). */
+  private engineChatOf(sessionId: string, chatId: string, messageId: string): Promise<string> {
+    const store = this.lidMappingStore;
+    return engineChatOf(this.messageRepository, sessionId, chatId, messageId, id =>
+      resolveJidCandidates(
+        id,
+        store && {
+          resolveLid: lid => store.findPhoneForLid(lid),
+          lidsForPhone: phone => store.findLidsForPhone(phone),
+        },
+      ),
+    );
   }
 
   /**
@@ -939,6 +1113,25 @@ export class MessageSendService {
     lifetime?: SessionWriteScope,
     onSessionConfig?: (config: unknown) => void,
   ): Promise<Message> {
+    try {
+      return await this.storeOutgoing(sessionId, data, lifetime, onSessionConfig);
+    } catch (error) {
+      // An item the engine already sent (a bulk send's) is written again once the database answers: no other row
+      // records the send. One whose session went away has nothing left to write.
+      if (data.waMessageId && data.status === MessageStatus.SENT && !(error instanceof NotFoundException)) {
+        this.keepSentWrite({ kind: 'insert', sessionId, data }, error);
+      }
+      throw error;
+    }
+  }
+
+  /** {@link saveOutgoingMessage}, with nothing kept when it fails. */
+  private async storeOutgoing(
+    sessionId: string,
+    data: SaveOutgoingMessageData,
+    lifetime?: SessionWriteScope,
+    onSessionConfig?: (config: unknown) => void,
+  ): Promise<Message> {
     const scope =
       lifetime ?? captureSessionWrites(this.messageRepository.manager?.connection ?? this.messageRepository, sessionId);
     try {
@@ -951,6 +1144,9 @@ export class MessageSendService {
       const quotedMessage = data.quotedMessageId
         ? { id: data.quotedMessageId, body: await this.resolveQuotedBody(sessionId, data.quotedMessageId) }
         : undefined;
+      const chatId = data.resolvedChatId ?? data.chatId;
+      if (data.resolvedChatId) this.pacing.rememberResolvedNumber(sessionId, data.chatId, data.resolvedChatId);
+      const engineRef = data.waMessageId ? addressedRef(chatId, data.engineChatId) : undefined;
       const message = this.messageRepository.create({
         sessionId,
         // An engine that sent a message but could not read its id back reports an empty id (see the
@@ -960,17 +1156,18 @@ export class MessageSendService {
         // swallowed into a warning, losing the row silently. Normalizing at this one chokepoint covers
         // every caller instead of relying on each to remember.
         waMessageId: data.waMessageId || undefined,
-        chatId: data.chatId,
+        chatId,
         // The account's JID, the form the engines' own-send echo stores for the same message; 'me' only while the
         // session has no number to name it by.
         from: session?.phone ? `${session.phone}@c.us` : 'me',
-        to: data.chatId,
+        to: chatId,
         body: data.body,
         type: data.type,
         direction: MessageDirection.OUTGOING,
         timestamp: data.timestamp,
         status: data.status ?? MessageStatus.PENDING,
         metadata: quotedMessage ? { ...data.metadata, quotedMessage } : data.metadata,
+        engineRef,
       });
       // No transaction of its own: the unique violation handled below is routine (the own-send echo wins the
       // race), and on SQLite's single shared connection its rollback would discard what other callers wrote
@@ -980,40 +1177,15 @@ export class MessageSendService {
         .catch(async (err: unknown) => {
           const waMessageId = message.waMessageId;
           if (!waMessageId || !isUniqueViolation(err)) throw err;
-          // No `status` here on purpose. The row this collides with is the own-send echo's, inserted
-          // SENT, and the ack path advances it forward-only (ackStatusTransitionFrom). This write only
-          // ever carries PENDING or SENT, so it can never be an upgrade: it is a no-op, or it drags a
-          // DELIVERED/READ row back to SENT when an ack won the race. Leave the delivery state to the
-          // one writer that owns it.
-          const patch: QueryDeepPartialEntity<Message> = {
-            timestamp: message.timestamp,
-          };
-          // Only when this write actually carries metadata worth merging: a text item must not blank
-          // the echo's, and a URL pointer must not replace bytes the engine already downloaded.
-          const metadata = message.metadata;
-          if (metadata && !isUrlPointerMetadata(metadata)) {
-            try {
-              await updateMessageMetadata(this.messageRepository, { sessionId, waMessageId }, current =>
-                mergeSentMetadata(current, metadata),
-              );
-            } catch (error) {
-              if (message.status !== MessageStatus.SENT) throw error;
-              this.logger.warn(`Merging sent metadata onto the echo row failed (id=${waMessageId})`, {
-                error: error instanceof Error ? error.message : String(error),
-              });
-              // The bulk engine has already sent this item. Keep its media in an id-less SENT row
-              // when the echo cannot accept it, instead of losing the only payload-bearing copy.
-              return scope.write(() =>
-                this.messageRepository.save(this.messageRepository.create({ ...message, waMessageId: undefined }), {
-                  transaction: false,
-                }),
-              );
-            }
-          }
-          if (message.timestamp !== undefined) await this.messageRepository.update({ sessionId, waMessageId }, patch);
-          const surviving = await this.messageRepository.findOne({ where: { sessionId, waMessageId } });
-          if (!surviving) throw err;
-          return surviving;
+          // The engine has already sent this item: it is kept as the echo row's twin, with its media, until what it
+          // holds is on that row (see settleEchoTwin), never lost to a merge that fails.
+          const twin = await scope.write(() =>
+            this.messageRepository.save(
+              this.messageRepository.create({ ...message, waMessageId: undefined, echoOf: waMessageId }),
+              { transaction: false },
+            ),
+          );
+          return (await this.settleEchoTwin({ ...twin, echoOf: waMessageId })) ?? twin;
         });
       this.emitPersisted(sessionId, saved);
       return saved;
@@ -1039,8 +1211,12 @@ export class MessageSendService {
   // Hook emissions keep `source: 'MessageService'` — the string is part of the observable hook
   // contract plugins may filter on, so the send seam must not change it.
   private emitPersisted(sessionId: string, message: Message): void {
+    // The chat the engine delivered to stays in the gateway, as for a row a hook moved, and so does the echo row's id
+    // a twin is still to be merged onto.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { engineRef, echoOf, ...row } = message;
     void this.hookManager
-      .execute('message:persisted', { sessionId, message: { ...message } }, { sessionId, source: 'MessageService' })
+      .execute('message:persisted', { sessionId, message: row }, { sessionId, source: 'MessageService' })
       .catch(() => undefined);
     if (ARCHIVABLE_OUTBOUND_STATUSES.has(message.status) && this.archiveOutboundEnabled) {
       void this.chatMediaArchive?.archive(message).catch(() => undefined);
@@ -1088,7 +1264,7 @@ export class MessageSendService {
     // fixed columns, so anything not listed here (the resolved button label, for one) is never stored.
     // `metadata` is listed only when it changed: the insert already stored it, and a base64 media
     // payload inside it would otherwise be written a second time on every send.
-    changed: Pick<QueryDeepPartialEntity<Message>, 'body' | 'metadata'> = {},
+    changed: Pick<QueryDeepPartialEntity<Message>, 'body' | 'metadata' | 'chatId' | 'to'> = {},
   ): Promise<MessageResponseDto> {
     // A send whose engine couldn't read the sent message's id back reports an empty id — a forward that
     // can't recover the copy, or a WhatsApp Web build that renamed the id field out from under the
@@ -1099,17 +1275,40 @@ export class MessageSendService {
     if (result.id) message.waMessageId = result.id;
     message.status = MessageStatus.SENT;
     message.timestamp = result.timestamp;
+    // WhatsApp holds the number under other digits than the caller wrote, or answered only the contact's lid. The
+    // message went there and the reply arrives there, so the row is filed there too, not under a spelling nothing
+    // else uses.
+    const resolved = result.resolvedChatId ? { chatId: result.resolvedChatId, to: result.resolvedChatId } : {};
+    // The id the caller wrote holds no row from here on: pacing has to know it is a contact the account knows.
+    if (result.resolvedChatId) {
+      this.pacing.rememberResolvedNumber(message.sessionId, message.chatId, result.resolvedChatId);
+    }
+    Object.assign(message, resolved);
+    changed = { ...changed, ...resolved };
+    // Kept off `message`, which goes to `message:persisted`: written with the id, so the echo of the send, and any
+    // change naming the chat it was delivered to, is judged against both chats from the first moment.
+    const engineRef = addressedRef(message.chatId, result.engineChatId);
     // Set when the row was no longer PENDING at the first write: the pending reaper failed it while the engine answered.
-    // The reaper can also fail it later, while the echo merge below is tried; the recovery there covers both.
+    // The reaper can also fail it later, before it is kept as the echo row's twin; keepAsEchoTwin covers both.
     let reaped = false;
+    // The SENT write the database refused runs again once it answers, with the payload of a row the reaper failed.
+    const rerun = (error: unknown): void =>
+      this.keepSentWrite(
+        {
+          kind: 'update',
+          sessionId: message.sessionId,
+          rowId: message.id,
+          result: { id: result.id, timestamp: result.timestamp },
+          changed: reaped
+            ? { ...changed, metadata: message.metadata as QueryDeepPartialEntity<Record<string, unknown>> }
+            : changed,
+          engineRef,
+        },
+        error,
+      );
     try {
       // No transaction of its own, for the reason given at the first save of this message.
-      const sent: QueryDeepPartialEntity<Message> = {
-        ...changed,
-        waMessageId: message.waMessageId,
-        status: message.status,
-        timestamp: message.timestamp,
-      };
+      const sent = sentPatch(changed, result, engineRef);
       // Guarded on the row still being PENDING, so the common write carries no metadata. A row the pending
       // reaper failed while the engine was still answering has lost its media payload and gained a marker:
       // it is written again, unguarded, with the metadata the insert stored. No row at all means the
@@ -1130,97 +1329,244 @@ export class MessageSendService {
       this.emitPersisted(message.sessionId, message);
     } catch (persistError) {
       if (result.id && isUniqueViolation(persistError)) {
-        // The engine's own-send echo (onMessageCreate) won the race and already persisted a row with
-        // this waMessageId. That row carries only what the engine reported — for a Baileys API send,
-        // a media-less marker — so merge our SENT state AND our metadata (the actual media payload)
-        // onto it BEFORE dropping this redundant PENDING row, or the payload-bearing row is the one
-        // that gets deleted and the media is gone after a reload.
         // Best-effort throughout: the send itself already succeeded.
-        this.logger.debug(
-          `Send echo already persisted ${result.id}; merging state and dropping the redundant pending row`,
-          {
-            messageId: message.id,
-          },
-        );
-        // `status` is deliberately absent: the echo row is already SENT, and an ack that landed
-        // first has advanced it further. Writing SENT here would undo that. See the sibling merge
-        // in saveOutgoingMessage.
-        const patch: QueryDeepPartialEntity<Message> = { timestamp: result.timestamp };
-        const metadata = message.metadata;
-        let metadataMerged = true;
-        if (metadata && !isUrlPointerMetadata(metadata)) {
-          await updateMessageMetadata(
-            this.messageRepository,
-            { sessionId: message.sessionId, waMessageId: result.id },
-            current => mergeSentMetadata(current, metadata),
-          ).catch(err => {
-            metadataMerged = false;
-            this.logger.warn(`Merging media onto the echo-persisted row failed (id=${result.id})`, {
-              error: err instanceof Error ? err.message : String(err),
-            });
-          });
-        }
-        if (!metadataMerged) {
-          // Keep the payload-bearing row when the echo merge fails. Mark it SENT without the
-          // conflicting engine id so the pending reaper cannot strip successfully sent media. This is the
-          // row that survives, so it carries what the send resolved too (a clicked button's label). A row the
-          // reaper failed first, before the first write above or while the merge was tried, is FAILED and
-          // lost its payload: the write guarded on PENDING then matches nothing, and the row is marked SENT
-          // from the copy this send still holds instead.
-          const keep = (status: MessageStatus, payload: QueryDeepPartialEntity<Message>) =>
-            this.messageRepository.update({ id: message.id, status }, payload).catch(err => {
-              this.logger.warn(`Preserving the sent media row failed (id=${message.id})`, {
-                error: err instanceof Error ? err.message : String(err),
-              });
-              return undefined;
-            });
-          const kept = reaped
-            ? undefined
-            : await keep(MessageStatus.PENDING, {
-                status: MessageStatus.SENT,
-                timestamp: result.timestamp,
-                ...changed,
-              });
-          if (reaped || kept?.affected === 0) {
-            await keep(MessageStatus.FAILED, {
-              status: MessageStatus.SENT,
-              timestamp: result.timestamp,
-              ...changed,
-              metadata: message.metadata as QueryDeepPartialEntity<Record<string, unknown>>,
-            });
-          }
-          const retained = await this.messageRepository.findOne({ where: { id: message.id } }).catch(() => null);
-          if (retained) this.emitPersisted(message.sessionId, retained);
-          return { messageId: result.id, timestamp: result.timestamp };
-        }
-        await this.messageRepository
-          .update({ sessionId: message.sessionId, waMessageId: result.id }, patch)
-          .catch(err =>
-            this.logger.warn(`Merging SENT state onto the echo-persisted row failed (id=${result.id})`, {
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          );
-        await this.messageRepository.delete({ id: message.id }).catch(() => undefined);
-        // Reconcile provider indexes (#906): upsert the surviving echo row (now carrying our SENT
-        // state + media) and drop the ghost PENDING document this redundant row produced earlier.
-        const surviving = await this.messageRepository
-          .findOne({ where: { sessionId: message.sessionId, waMessageId: result.id } })
-          .catch(() => null);
-        if (surviving) this.emitPersisted(message.sessionId, surviving);
-        void this.hookManager
-          .execute(
-            'message:deleted',
-            { sessionId: message.sessionId, message: { ...message } },
-            { sessionId: message.sessionId, source: 'MessageService' },
-          )
-          .catch(() => undefined);
+        await this.keepAsEchoTwin(message, result, changed, engineRef, reaped).catch(rerun);
       } else {
-        this.logger.warn(`Persisting SENT state failed after a successful send (id=${result.id})`, {
-          error: persistError instanceof Error ? persistError.message : String(persistError),
-        });
+        rerun(persistError);
       }
     }
     return { messageId: result.id, timestamp: result.timestamp };
+  }
+
+  /**
+   * Keep a SENT write the database refused, to run again once it answers (see SentWrite), and log it. Without the
+   * queue (a service built standalone) it is only logged, as before.
+   */
+  private keepSentWrite(write: SentWrite, error: unknown): void {
+    const messageId = write.kind === 'insert' ? write.data.waMessageId : write.result.id;
+    const context = {
+      sessionId: write.sessionId,
+      messageId,
+      error: error instanceof Error ? error.message : String(error),
+    };
+    if (!this.recovery) {
+      this.logger.warn(`Persisting SENT state failed after a successful send (id=${messageId})`, context);
+      return;
+    }
+    this.logger.warn('Keeping the SENT write of a send the database refused, to write it once it answers', {
+      ...context,
+      action: 'sent_write_kept',
+    });
+    this.recovery.park(sentWriteKey(write), this.sentRerun(write, Date.now()));
+  }
+
+  private sentRerun(write: SentWrite, since: number): SentRerun {
+    if (write.kind === 'update') this.rerunRows.add(write.rowId);
+    return new SentRerun(write, since, this);
+  }
+
+  /** Whether the SENT write of this row is kept to run again, so the pending reaper must leave the row alone. */
+  hasPendingSentWrite(rowId: string): boolean {
+    return this.rerunRows.has(rowId);
+  }
+
+  /** A SENT write left the queue: written, forgotten with its session, or given up on (`loss`), which is logged. */
+  sentWriteGone(write: SentWrite, loss?: RecoveryLoss): void {
+    if (write.kind === 'update') this.rerunRows.delete(write.rowId);
+    if (!loss) return;
+    this.logger.error('A send WhatsApp accepted could not be stored as sent; its row is left as it was', undefined, {
+      sessionId: write.sessionId,
+      messageId: write.kind === 'insert' ? write.data.waMessageId : write.result.id,
+      reason: loss,
+      action: 'sent_write_lost',
+    });
+  }
+
+  /**
+   * One more try of a kept SENT write: true once nothing is left of it, and throws while the database refuses it. The
+   * update of a single send runs as it did, the echo row's id met included; a row another node's reaper failed
+   * meanwhile is marked SENT without the payload it dropped. A bulk item is inserted again, unless its session is gone.
+   */
+  async rerunSentWrite(write: SentWrite): Promise<boolean> {
+    if (write.kind === 'insert') {
+      await this.storeOutgoing(write.sessionId, write.data).catch((error: unknown) => {
+        if (!(error instanceof NotFoundException)) throw error;
+      });
+      return true;
+    }
+    const { sessionId, rowId, result, changed, engineRef } = write;
+    const sent = sentPatch(changed, result, engineRef);
+    try {
+      let updated = await this.messageRepository.update({ id: rowId, sessionId, status: MessageStatus.PENDING }, sent);
+      if (!updated.affected) updated = await this.messageRepository.update({ id: rowId, sessionId }, sent);
+      const row = updated.affected ? await this.messageRepository.findOne({ where: { id: rowId } }) : null;
+      if (row) this.emitPersisted(sessionId, row);
+      return true;
+    } catch (error) {
+      if (!result.id || !isUniqueViolation(error)) throw error;
+      const row = await this.messageRepository.findOne({ where: { id: rowId } });
+      if (row) {
+        const reaped = row.status !== MessageStatus.PENDING;
+        await this.keepAsEchoTwin(Object.assign(row, changed as Partial<Message>), result, changed, engineRef, reaped);
+      }
+      return true;
+    }
+  }
+
+  /**
+   * The engine's own-send echo (onMessageCreate) won the race and already persisted a row with the message id. That
+   * row carries only what the engine reported (for a Baileys API send, a media-less marker), so this send's row first
+   * becomes its twin: SENT, so the pending reaper never fails it and strips the media, and naming the echo row by
+   * `echoOf`, with the chat the message was delivered to. What it holds is then merged onto the echo row and the twin
+   * dropped (settleEchoTwin); a step that fails leaves the twin for the reaper's sweep. A row the reaper failed first
+   * lost its payload: the write guarded on PENDING matches nothing, and the row is marked from the copy this send still
+   * holds instead.
+   */
+  private async keepAsEchoTwin(
+    message: Message,
+    result: MessageResult,
+    changed: QueryDeepPartialEntity<Message>,
+    engineRef: MessageEngineRef | undefined,
+    reaped: boolean,
+  ): Promise<void> {
+    this.logger.debug(`Send echo already persisted ${result.id}; merging onto it and dropping this row`, {
+      messageId: message.id,
+    });
+    const twin: QueryDeepPartialEntity<Message> = {
+      ...changed,
+      status: MessageStatus.SENT,
+      timestamp: result.timestamp,
+      echoOf: result.id,
+      ...(engineRef ? { engineRef } : {}),
+    };
+    let marked = reaped
+      ? undefined
+      : await this.messageRepository.update({ id: message.id, status: MessageStatus.PENDING }, twin);
+    if (!marked?.affected) {
+      marked = await this.messageRepository.update(
+        { id: message.id, status: MessageStatus.FAILED },
+        { ...twin, metadata: message.metadata as QueryDeepPartialEntity<Record<string, unknown>> },
+      );
+    }
+    // No row: the session was deleted under this send.
+    if (!marked?.affected) return;
+    const surviving = await this.settleEchoTwin(
+      {
+        id: message.id,
+        sessionId: message.sessionId,
+        chatId: message.chatId,
+        metadata: message.metadata,
+        timestamp: result.timestamp,
+        echoOf: result.id,
+        engineRef,
+      },
+      { ...message },
+    );
+    if (surviving !== undefined) {
+      if (surviving) this.emitPersisted(message.sessionId, surviving);
+      return;
+    }
+    // Reconcile the earlier PENDING emission (#906) with the twin that stays until the reaper's sweep settles it.
+    const retained = await this.messageRepository.findOne({ where: { id: message.id } }).catch(() => null);
+    if (retained) this.emitPersisted(message.sessionId, retained);
+  }
+
+  /**
+   * Finish an API send whose message id the own-send echo's row took first, from its twin (see Message.echoOf): merge
+   * what the twin holds onto the echo row, never onto one revoked since (the twin then goes with what it holds), and
+   * not a URL pointer over bytes the engine downloaded; carry its timestamp; move the echo row under the chat the
+   * caller addressed; drop the twin. With the echo row gone, the twin takes the message id. No status is written: the
+   * echo row is inserted SENT and acks advance it forward only. Every step can run again, so one that fails leaves the
+   * twin for the pending reaper's sweep, which calls this again. `announced` is the twin as `message:persisted` last
+   * saw it, withdrawn with `message:deleted` once the twin is gone. Resolves the row that holds the message now, null
+   * when none does, or undefined when the twin is left.
+   */
+  private async settleEchoTwin(twin: EchoTwin, announced?: Message): Promise<Message | null | undefined> {
+    const { sessionId, echoOf } = twin;
+    const where = { sessionId, waMessageId: echoOf };
+    try {
+      const echo = await this.messageRepository.findOne({ where, select: { id: true, type: true } });
+      if (!echo) {
+        const claimed = await this.messageRepository.update(
+          { id: twin.id, echoOf },
+          { waMessageId: echoOf, echoOf: null },
+        );
+        return claimed?.affected ? this.messageRepository.findOne({ where: { id: twin.id } }) : null;
+      }
+      const metadata = twin.metadata;
+      if (echo.type !== 'revoked' && metadata && !isUrlPointerMetadata(metadata)) {
+        // Null: the echo row was revoked or removed since it was read, which the next sweep tells apart.
+        const merged = await updateMessageMetadata(this.messageRepository, where, current =>
+          mergeSentMetadata(current, metadata),
+        );
+        if (!merged) return undefined;
+      }
+      if (twin.timestamp != null) await this.messageRepository.update(where, { timestamp: twin.timestamp });
+      if (twin.engineRef?.addressed) await this.moveEchoRow(sessionId, echoOf, twin.chatId, twin.engineRef);
+      const deleted = await this.messageRepository.delete({ id: twin.id, echoOf });
+      // Only for a row that is gone (#906): a delete that failed or found nothing leaves the provider's copy right.
+      if (deleted?.affected && announced) {
+        void this.hookManager
+          .execute('message:deleted', { sessionId, message: announced }, { sessionId, source: 'MessageService' })
+          .catch(() => undefined);
+      }
+      return this.messageRepository.findOne({ where });
+    } catch (error) {
+      this.logger.warn(`Merging a sent row onto the echo-persisted row failed (id=${echoOf})`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * The pending reaper's pass over API sends whose merge onto the echo row was left (see settleEchoTwin): the rows
+   * with `echoOf` stored before `before`, oldest first, at most `limit`, until `stopped`. Resolves how many settled.
+   */
+  async reconcileEchoTwins(before: Date, limit: number, stopped: () => boolean = () => false): Promise<number> {
+    const columns = Object.fromEntries(
+      this.messageRepository.metadata.columns.map(column => [column.propertyName, true]),
+    ) as FindOptionsSelect<Message>;
+    const twins = await this.messageRepository.find({
+      where: { echoOf: Not(IsNull()), createdAt: LessThan(before) },
+      select: columns,
+      order: { createdAt: 'ASC' },
+      take: limit,
+    });
+    let settled = 0;
+    for (const twin of twins) {
+      if (stopped()) break;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { engineRef, echoOf, ...announced } = twin;
+      const surviving = await this.settleEchoTwin({ ...twin, echoOf: echoOf! }, announced);
+      if (surviving === undefined) continue;
+      settled++;
+      if (surviving) this.emitPersisted(twin.sessionId, surviving);
+    }
+    return settled;
+  }
+
+  /**
+   * File the own-send echo's row, which names the chat the engine delivered the message to, under the chat the caller
+   * addressed (`filed`), with that delivered chat in its engine ref, so both orders of the two writers store one row.
+   * Only a row still where the echo put it moves: one a `message:sent` handler filed elsewhere keeps its engine ref.
+   */
+  private async moveEchoRow(
+    sessionId: string,
+    waMessageId: string,
+    filed: string,
+    engineRef: MessageEngineRef,
+  ): Promise<void> {
+    await this.messageRepository.update(
+      {
+        sessionId,
+        waMessageId,
+        chatId: engineRef.chatId,
+        direction: MessageDirection.OUTGOING,
+        engineRef: IsNull(),
+      },
+      { chatId: filed, to: filed, engineRef },
+    );
   }
 
   private getEngine(sessionId: string) {

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, LessThanOrEqual, Repository } from 'typeorm';
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { WAMessage } from '@whiskeysockets/baileys';
 import { BaileysStoredMessage } from './baileys-stored-message.entity';
@@ -184,7 +184,7 @@ export class BaileysMessageStoreService implements BaileysMessageStore {
 
   private async readStored(sessionId: string, messageId: string): Promise<WAMessage | null> {
     const row = await this.repo.findOne({ where: { sessionId, waMessageId: messageId } });
-    if (!row) {
+    if (!row || !this.visible(row)) {
       return null;
     }
     const { BufferJSON } = await this.loadLib();
@@ -199,7 +199,9 @@ export class BaileysMessageStoreService implements BaileysMessageStore {
       return [];
     }
     await Promise.all(ids.map(id => this.settled(sessionId, id)));
-    const rows = await this.repo.find({ where: { sessionId, waMessageId: In(ids) } });
+    const rows = (await this.repo.find({ where: { sessionId, waMessageId: In(ids) } })).filter(row =>
+      this.visible(row),
+    );
     if (rows.length === 0) {
       return [];
     }
@@ -212,7 +214,13 @@ export class BaileysMessageStoreService implements BaileysMessageStore {
     await this.pendingWrites.get(`${sessionId}:${messageId}`)?.catch(() => undefined);
   }
 
-  async clearSession(sessionId: string): Promise<void> {
+  /**
+   * Delete a session's rows, or (`before`, an unlink) those written up to that time: the rows of the next account to
+   * link the session stay when the delete runs again later, once a database that refused it answers. Until it lands,
+   * those rows read as absent, so the next account is handed none of them.
+   */
+  async clearSession(sessionId: string, before?: Date): Promise<void> {
+    if (before) this.hideUpTo(sessionId, before);
     // A write already in flight would recreate its row after the delete. Its failure is the writer's to report.
     const prefix = `${sessionId}:`;
     await Promise.all(
@@ -221,7 +229,37 @@ export class BaileysMessageStoreService implements BaileysMessageStore {
         .map(([, write]) => write.catch(() => undefined)),
     );
     this.writesSinceTrim.delete(sessionId);
-    await this.repo.delete({ sessionId });
+    await this.repo.delete(before ? { sessionId, createdAt: LessThanOrEqual(before) } : { sessionId });
+    // Compared by time: the clear kept for later hands over a Date of its own.
+    if (!before || this.clearedUpTo.get(sessionId)?.getTime() === before.getTime()) this.clearedUpTo.delete(sessionId);
+  }
+
+  /** Read a session's rows written up to `upTo` as absent, until clearSession deletes them (an unlink kept for later). */
+  hideUpTo(sessionId: string, upTo: Date): void {
+    const hidden = this.clearedUpTo.get(sessionId);
+    if (!hidden || hidden < upTo) this.clearedUpTo.set(sessionId, upTo);
+  }
+
+  /**
+   * Whether a row read raw from the table (a backup) is one an unlinked account left, hidden until its kept clear lands.
+   * Its stamp is read as the ORM reads it for an entity, so it compares as the reads of this store do.
+   */
+  hidesRaw(row: { sessionId?: unknown; createdAt?: unknown }): boolean {
+    const hidden = typeof row.sessionId === 'string' ? this.clearedUpTo.get(row.sessionId) : undefined;
+    if (!hidden) return false;
+    const column = this.repo.metadata.findColumnWithPropertyName('createdAt');
+    const stamp: unknown = column
+      ? this.repo.manager.connection.driver.prepareHydratedValue(row.createdAt, column)
+      : row.createdAt;
+    return new Date(stamp as string | number | Date).getTime() <= hidden.getTime();
+  }
+
+  // Up to when an unlinked account's rows read as absent, by session, until clearSession deletes them.
+  private readonly clearedUpTo = new Map<string, Date>();
+
+  private visible(row: BaileysStoredMessage): boolean {
+    const hidden = this.clearedUpTo.get(row.sessionId);
+    return !hidden || new Date(row.createdAt).getTime() > hidden.getTime();
   }
 
   /** Per-session row cap: keep the newest N, delete the rest. Deterministic via (createdAt, id). */

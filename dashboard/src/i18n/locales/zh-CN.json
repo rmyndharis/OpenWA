@@ -389,6 +389,7 @@
     "connecting": "正在连接...",
     "invalidKey": "API 密钥无效",
     "connectionError": "无法连接到服务器。请重试。",
+    "sessionNotKept": "密钥已通过验证，但此浏览器没有保存会话 Cookie。仪表盘与 API 必须属于同一站点，或者部署在同一源（origin）下。",
     "help": "需要帮助？",
     "viewDocs": "查看文档",
     "footer": "由 Yudhi Armyndharis 和 OpenWA 社区用 ❤️ 打造",
@@ -1301,11 +1302,13 @@
       "exportFailed": "无法导出数据",
       "exportPartialTitle": "备份缺少部分媒体",
       "exportPartial": "{{count}} 个附件超出了导出的媒体容量上限，已保存为占位符。消息可以恢复，但其媒体无法恢复。",
+      "exportIncomplete": "下载在备份完成之前就结束了，因此未保存任何内容。请重试。",
       "importFailed": "无法导入数据",
       "importOk": "数据已导入",
       "importConfirm": "导入操作将用备份数据替换（REPLACE）当前所有数据（{{rows}} 行）。此操作无法撤销。是否继续？",
       "invalidFile": "该文件不是有效的 OpenWA 数据备份。",
-      "importTooLarge": "备份超出请求大小限制。请在服务器上调高 BODY_SIZE_LIMIT 后重试。"
+      "importTooLarge": "备份超出请求大小限制。请在服务器上调高 BODY_SIZE_LIMIT 后重试。",
+      "importStopped": "导入期间服务器已停止，导入已回滚，数据未发生变化。服务器恢复运行后，请重新导入同一文件。"
     },
     "statusLoadError": "无法加载当前基础设施状态。请刷新重试。",
     "configLoadError": "无法加载已保存的配置，因此无法在此编辑。请刷新重试。"

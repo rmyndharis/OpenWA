@@ -1,12 +1,25 @@
-import { MessageDirection } from '../message/entities/message.entity';
+import { MessageDirection, type MessageEngineRef } from '../message/entities/message.entity';
 import { parseWaId } from '../../engine/identity/wa-id';
+import { type ContactDirectory, resolveJidCandidates } from '../../engine/identity/jid-candidates';
 
 /** What a stored row says about whose message it is and where it lives. */
 export interface StoredMessageRef {
   chatId: string;
   direction: MessageDirection;
   author?: string | null;
+  /** What the engine reported, on a row a message hook filed under another chat, direction or author. */
+  engineRef?: MessageEngineRef | null;
 }
+
+/** The ref a change is judged by: the engine's, never what a hook filed the row under. */
+const judged = (row: StoredMessageRef): StoredMessageRef => row.engineRef ?? row;
+
+/**
+ * Every ref a change is judged by, foreign only when each says so: the row's own columns, or the engine's ref of a row
+ * a hook moved, and both on the row of an API send delivered to another chat than the one its caller addressed.
+ */
+const judgedRefs = (row: StoredMessageRef): StoredMessageRef[] =>
+  row.engineRef ? (row.engineRef.addressed ? [row.engineRef, row] : [row.engineRef]) : [row];
 
 /** What an inbound edit, revoke or reaction says about who made it and where. */
 export interface MutationSource {
@@ -18,13 +31,24 @@ export interface MutationSource {
   author?: string;
   /** For a group revoke a member sent, whether the group's roster shows them an admin; undefined when unknown. */
   admin?: boolean;
+  /**
+   * For a delete or edit through the API, the chat its caller named when `chatId` is the one the engine reported:
+   * the engine found the message there too, so a row stored under either chat may take the change.
+   */
+  callerChatId?: string;
+  /**
+   * For a message delivered again, how a message hook filed it when it filed it elsewhere: a row stored before engine
+   * refs were kept says only where a hook filed it, so it may take the change as that too.
+   */
+  filedAs?: Pick<MutationSource, 'chatId' | 'fromMe' | 'author'>;
 }
 
 /**
  * What two spellings of one phone number share: its digits, without a '+', spaces or dashes, and without
  * the mobile marker digit that a Brazilian (`55` + area + `9`), Mexican (`521`) or Argentine (`549`) number
- * is written with in one spelling and without in the other. A send stores the chat id as its caller wrote
- * it, so the stored form and the one the engine reports can differ in either direction.
+ * is written with in one spelling and without in the other. A send is stored under the number WhatsApp
+ * resolved, but a row written by an earlier release keeps the chat id as its caller wrote it, so the stored
+ * form and the one the engine reports can still differ in either direction.
  */
 export function phoneKey(local: string): string {
   return local
@@ -32,6 +56,46 @@ export function phoneKey(local: string): string {
     .replace(/^55(\d{2})9(\d{8})$/, '55$1$2')
     .replace(/^521(\d{10})$/, '52$1')
     .replace(/^549(\d+)$/, '54$1');
+}
+
+/**
+ * Every spelling of a phone number that {@link phoneKey} folds into one: its digits as written, and its other
+ * spelling where it is a Brazilian, Mexican or Argentine number, with the mobile marker digit or without it.
+ * A number none of the three rules covers is only itself, and what holds no digit is no number at all.
+ */
+export function phoneSpellings(local: string): string[] {
+  const digits = local.replace(/\D/g, '');
+  const key = phoneKey(digits);
+  const marked = key
+    .replace(/^55(\d{2})(\d{8})$/, (_match, area: string, line: string) => `55${area}9${line}`)
+    .replace(/^52(\d{10})$/, '521$1')
+    .replace(/^54(\d+)$/, '549$1');
+  // A spelling has to fold back into the same number: taking the marker off twice would name another one.
+  return [...new Set([digits, key, marked])].filter(spelling => spelling !== '' && phoneKey(spelling) === key);
+}
+
+/**
+ * Every id a writer may store for the entity `jid` names, as {@link provablyDifferent} takes it: a phone in each user
+ * dialect and each spelling {@link phoneKey} folds into it, with the lids reported for it, and a lid in both lid
+ * dialects with the phone reported for it (other lids of that phone are other people). A group or any other id is
+ * itself and its neutral form.
+ */
+export async function storedSpellings(jid: string, directory?: ContactDirectory): Promise<string[]> {
+  const lid = parseWaId(jid).kind === 'lid';
+  const ids = new Set([jid, ...(await resolveJidCandidates(jid, directory))]);
+  for (const id of [...ids]) {
+    const parsed = parseWaId(id);
+    if (parsed.kind !== 'user') continue;
+    for (const spelling of phoneSpellings(parsed.userPart)) {
+      for (const other of await resolveJidCandidates(`${spelling}@c.us`, lid ? undefined : directory)) ids.add(other);
+    }
+  }
+  for (const id of [...ids]) {
+    const parsed = parseWaId(id);
+    if (parsed.kind === 'user') ids.add(`${parsed.userPart}@hosted`);
+    if (parsed.kind === 'lid') ids.add(`${parsed.userPart}@hosted.lid`);
+  }
+  return [...ids];
 }
 
 /**
@@ -115,8 +179,29 @@ export function provablyDifferent(
  *  - `author`: a group edit comes from the participant who wrote the message, and so does a group revoke
  *    by a member the group's roster shows is no admin: it cannot name a message the account sent, nor one
  *    another member wrote. A lid and a phone number with no reported pairing prove nothing here.
+ *
+ * A row a message hook filed under another chat, direction or author is judged by its `engineRef`, so the hook
+ * neither keeps a change from reaching it nor lets one naming the chat it chose through. On a row without an
+ * `engineRef` a change that names a `callerChatId` or a `filedAs` is foreign only when that proves it so as well;
+ * on a row with one, the chat a hook filed the row under is never accepted. The row of an API send delivered to
+ * another chat than its caller addressed (`engineRef.addressed`) is judged by both: its columns are the caller's.
  */
 export function mutationTargetsForeignRow(
+  row: StoredMessageRef,
+  source: MutationSource,
+  resolveLid?: (jid: string) => string | null,
+): 'chat' | 'direction' | 'author' | null {
+  const reason = foreignReason(judged(row), source, resolveLid);
+  if (!reason || (row.engineRef && !row.engineRef.addressed)) return reason;
+  if (row.engineRef && !foreignReason(row, source, resolveLid)) return null;
+  if (source.callerChatId && !foreignReason(row, { ...source, chatId: source.callerChatId }, resolveLid)) return null;
+  if (!row.engineRef && source.filedAs && !foreignReason(row, { ...source, ...source.filedAs }, resolveLid)) {
+    return null;
+  }
+  return reason;
+}
+
+function foreignReason(
   row: StoredMessageRef,
   source: MutationSource,
   resolveLid?: (jid: string) => string | null,
@@ -159,7 +244,16 @@ export async function mutationTargetsForeignRowPersisted(
   if (!resolveLid) return mutationTargetsForeignRow(row, source);
   const phones = new Map<string, string | null>();
   await Promise.all(
-    [...new Set([row.chatId, row.author, source.chatId, source.author])].map(async jid => {
+    [
+      ...new Set([
+        ...judgedRefs(row).flatMap(ref => [ref.chatId, ref.author]),
+        source.chatId,
+        source.callerChatId,
+        source.author,
+        source.filedAs?.chatId,
+        source.filedAs?.author,
+      ]),
+    ].map(async jid => {
       if (jid && parseWaId(jid).kind === 'lid') phones.set(jid, await resolveLid(jid).catch(() => null));
     }),
   );
@@ -174,15 +268,20 @@ export async function mutationTargetsForeignRowPersisted(
  * A receipt for a message the account sent to a broadcast list comes from each recipient's own chat, and one for a
  * list message an earlier version filed under the list from its sender's chat: neither is foreign. A lid and a
  * phone with no reported pairing prove nothing either. A receipt only ever moves delivery state forward, and
- * refusing it would leave the account's messages to a lid-addressed contact at sent.
+ * refusing it would leave the account's messages to a lid-addressed contact at sent. A row a message hook moved is
+ * judged by its `engineRef`, and the row of an API send delivered to another chat by that and its own columns.
  */
 export function receiptTargetsForeignRow(
   row: StoredMessageRef,
   chatId: string,
   resolveLid?: (jid: string) => string | null,
 ): boolean {
-  if (isOwnBroadcast(row) || receivedThroughList(row, chatId, resolveLid)) return false;
-  return differentWhenPaired(row.chatId, chatId, resolveLid);
+  return judgedRefs(row).every(
+    ref =>
+      !isOwnBroadcast(ref) &&
+      !receivedThroughList(ref, chatId, resolveLid) &&
+      differentWhenPaired(ref.chatId, chatId, resolveLid),
+  );
 }
 
 /** {@link provablyDifferent}, except that a lid and a phone number with no reported pairing prove nothing. */
@@ -208,7 +307,7 @@ export async function receiptTargetsForeignRowPersisted(
   if (!resolveLid) return receiptTargetsForeignRow(row, chatId);
   const phones = new Map<string, string | null>();
   await Promise.all(
-    [...new Set([row.chatId, row.author, chatId])].map(async jid => {
+    [...new Set([...judgedRefs(row).flatMap(ref => [ref.chatId, ref.author]), chatId])].map(async jid => {
       if (jid && parseWaId(jid).kind === 'lid') phones.set(jid, await resolveLid(jid).catch(() => null));
     }),
   );

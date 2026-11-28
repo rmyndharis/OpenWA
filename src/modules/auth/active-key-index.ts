@@ -2,7 +2,7 @@ import { Injectable, OnApplicationBootstrap, OnModuleDestroy, Optional } from '@
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, MoreThan, Repository } from 'typeorm';
 import type { IncomingHttpHeaders } from 'http';
-import { ApiKey } from './entities/api-key.entity';
+import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 import { BrowserSession } from './entities/browser-session.entity';
 import { hashApiKey } from './api-key-hash';
 import {
@@ -15,11 +15,15 @@ import { ipMatches } from '../../common/utils/ip';
 import { createLogger } from '../../common/services/logger.service';
 
 const REFRESH_INTERVAL_MS = 30_000;
+/** The least time between two reloads a caller forces. */
+const FORCED_REFRESH_INTERVAL_MS = 1_000;
 
 interface IndexedKey {
   keyHash: string;
   allowedIps: string[] | null;
   expiresAt: Date | null;
+  /** Admin with no session or chat restriction, which the routes for the whole instance require. */
+  unscopedAdmin: boolean;
 }
 
 interface IndexedSession {
@@ -41,6 +45,7 @@ export class ActiveKeyIndex implements OnApplicationBootstrap, OnModuleDestroy {
   private timer: ReturnType<typeof setInterval> | undefined;
   private loading: Promise<void> | undefined;
   private reloadAgain = false;
+  private forcedAt = 0;
   private destroyed = false;
 
   constructor(
@@ -90,6 +95,19 @@ export class ActiveKeyIndex implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   /**
+   * Reload now, and resolve once the view holds every key and session written before this call. A failed load
+   * keeps the last view, as the timed ones do. At most one reload a second is forced, since the caller asks
+   * before anything has authenticated or throttled the request; a call within that second waits for what runs.
+   */
+  async refresh(): Promise<void> {
+    if (Date.now() - this.forcedAt >= FORCED_REFRESH_INTERVAL_MS) {
+      this.forcedAt = Date.now();
+      this.refreshSoon();
+    }
+    await this.loading;
+  }
+
+  /**
    * The stored hash of the request's key (or the underlying key of an active browser session) when
    * it names an active, unexpired credential that may be used from clientIp; undefined otherwise.
    * Header credentials take exclusive precedence over session cookies.
@@ -116,6 +134,12 @@ export class ActiveKeyIndex implements OnApplicationBootstrap, OnModuleDestroy {
     return key.keyHash;
   }
 
+  /** Whether `recognise` names a key that is an unscoped admin. Advisory like the rest of the index. */
+  isUnscopedAdmin(headers: IncomingHttpHeaders, clientIp: string, path?: string): boolean {
+    const keyHash = this.recognise(headers, clientIp, path);
+    return keyHash !== undefined && this.keys.get(keyHash)?.unscopedAdmin === true;
+  }
+
   private isKeyUsable(key: IndexedKey, clientIp: string): boolean {
     // Expiry is checked here rather than in the query: SQLite stores dates as strings, and a key
     // that expires between two refreshes must stop counting at once. An expiry that reads back as an
@@ -128,13 +152,26 @@ export class ActiveKeyIndex implements OnApplicationBootstrap, OnModuleDestroy {
   private async load(): Promise<void> {
     try {
       const rows = await this.apiKeyRepository.find({
-        select: { id: true, keyHash: true, allowedIps: true, expiresAt: true },
+        select: {
+          id: true,
+          keyHash: true,
+          allowedIps: true,
+          expiresAt: true,
+          role: true,
+          allowedSessions: true,
+          allowedChats: true,
+        },
         where: { isActive: true },
       });
       const nextKeys = new Map<string, IndexedKey>();
       const nextKeysById = new Map<string, IndexedKey>();
       for (const row of rows) {
-        const entry: IndexedKey = { keyHash: row.keyHash, allowedIps: row.allowedIps, expiresAt: row.expiresAt };
+        const entry: IndexedKey = {
+          keyHash: row.keyHash,
+          allowedIps: row.allowedIps,
+          expiresAt: row.expiresAt,
+          unscopedAdmin: row.role === ApiKeyRole.ADMIN && !row.allowedSessions?.length && !row.allowedChats?.length,
+        };
         nextKeys.set(row.keyHash, entry);
         if (row.id) nextKeysById.set(row.id, entry);
       }

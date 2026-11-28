@@ -45,6 +45,7 @@ describe('CatalogService', () => {
       assertSendAllowed: jest.fn().mockResolvedValue(undefined),
       recordSendSuccess: jest.fn(),
       recordSendFailure: jest.fn(),
+      rememberResolvedNumber: jest.fn(),
       ...pacing,
     };
     return {
@@ -128,7 +129,7 @@ describe('CatalogService', () => {
       });
       const { svc } = makeService({ sendProduct }, pacing);
 
-      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1', 'Back in stock!')).resolves.toBe(sent);
+      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1', 'Back in stock!')).resolves.toEqual(sent);
       expect(order).toEqual(['pace', 'send']);
       expect(pacing.assertSendAllowed).toHaveBeenCalledWith('s1', '628123@c.us', { untilSettled: true });
       expect(sendProduct).toHaveBeenCalledWith('628123@c.us', 'prod-1', 'Back in stock!');
@@ -136,6 +137,21 @@ describe('CatalogService', () => {
 
     // A product card is a chat send like any other, so a moderation plugin that polices every chat
     // send must be able to stop it too.
+    it('answers the id and the time of the message, and nothing else the engine result names', async () => {
+      // The engine names the number WhatsApp resolved for the row a send stores; this route stores none.
+      const sendProduct = jest
+        .fn()
+        .mockResolvedValue({ id: 'OUT-1', timestamp: 1_700_000_101, resolvedChatId: '551187654321@c.us' });
+      const { svc, pacing } = makeService({ sendProduct });
+
+      await expect(svc.sendProduct('s1', '5511987654321@c.us', 'prod-1')).resolves.toStrictEqual({
+        id: 'OUT-1',
+        timestamp: 1_700_000_101,
+      });
+      // Pacing is told all the same, so the next send to the written id is not read as a new conversation.
+      expect(pacing.rememberResolvedNumber.mock.calls).toEqual([['s1', '5511987654321@c.us', '551187654321@c.us']]);
+    });
+
     it('offers the product send to message:sending and sends nothing when a plugin vetoes it', async () => {
       const hookManager = { execute: jest.fn().mockResolvedValue({ continue: false }) };
       const sendProduct = jest.fn().mockResolvedValue(sent);
@@ -167,7 +183,7 @@ describe('CatalogService', () => {
       const sendProduct = jest.fn().mockResolvedValue(sent);
       const { svc } = makeService({ sendProduct }, undefined, hookManager);
 
-      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1', 'Back in stock!')).resolves.toBe(sent);
+      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1', 'Back in stock!')).resolves.toEqual(sent);
       expect(sendProduct).toHaveBeenCalledWith('628123@c.us', 'prod-2', 'Rewritten');
     });
 
@@ -244,7 +260,7 @@ describe('CatalogService', () => {
       });
       const { svc } = makeService({ sendProduct }, pacing, passThroughHooks());
 
-      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1')).resolves.toBe(sent);
+      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1')).resolves.toEqual(sent);
       expect(settledDuringSend).toBe(0);
       expect(release.mock.calls).toEqual([[true]]);
     });
@@ -284,7 +300,7 @@ describe('CatalogService', () => {
       const sendProduct = jest.fn().mockResolvedValue(sent);
       const { svc } = makeService({ sendProduct }, undefined, new HookManager() as never);
 
-      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1', null as unknown as string)).resolves.toBe(sent);
+      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1', null as unknown as string)).resolves.toEqual(sent);
 
       expect(sendProduct).toHaveBeenCalledWith('628123@c.us', 'prod-1', undefined);
     });

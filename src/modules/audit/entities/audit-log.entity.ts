@@ -9,6 +9,11 @@ export enum AuditAction {
   API_KEY_DELETED = 'api_key_deleted',
   API_KEY_AUTH_FAILED = 'api_key_auth_failed',
 
+  // Dashboard browser sessions: a cookie minted from an API key, and a logout or replacement that
+  // revoked a live one. The key and client recorded here are the only trail of where a cookie came from.
+  BROWSER_SESSION_CREATED = 'browser_session_created',
+  BROWSER_SESSION_ENDED = 'browser_session_ended',
+
   // Rate-limit enforcement (sampled: at most one row per subject+kind per minute — see
   // EventsGateway — so enforcing a limit never becomes an audit-write flood of its own).
   RATE_LIMIT_EXCEEDED = 'rate_limit_exceeded',

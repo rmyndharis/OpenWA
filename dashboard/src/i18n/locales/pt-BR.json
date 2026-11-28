@@ -394,6 +394,7 @@
     "connecting": "Conectando...",
     "invalidKey": "Chave API inválida",
     "connectionError": "Não foi possível conectar ao servidor. Por favor, tente novamente.",
+    "sessionNotKept": "A chave foi aceita, mas este navegador não guardou o cookie de sessão. O painel e a API precisam estar no mesmo site ou ser servidos pela mesma origem.",
     "help": "Precisa de ajuda?",
     "viewDocs": "Ver documentação",
     "footer": "Feito com ❤️ por Yudhi Armyndharis e a comunidade OpenWA",
@@ -1310,11 +1311,13 @@
       "exportFailed": "Não foi possível exportar os dados",
       "exportPartialTitle": "Faltam algumas mídias no backup",
       "exportPartial": "Anexos acima do limite de mídia da exportação: {{count}}. Eles foram salvos como marcadores de posição. As mensagens são restauradas; as mídias delas, não.",
+      "exportIncomplete": "O download terminou antes de o backup estar completo, então nada foi salvo. Tente novamente.",
       "importFailed": "Não foi possível importar os dados",
       "importOk": "Dados importados",
       "importConfirm": "A importação IRÁ SUBSTITUIR todos os dados atuais pelo backup ({{rows}} linhas). Isso não pode ser desfeito. Continuar?",
       "invalidFile": "Esse arquivo não é um backup de dados válido do OpenWA.",
-      "importTooLarge": "O backup excede o limite da requisição. Aumente BODY_SIZE_LIMIT no servidor e tente novamente."
+      "importTooLarge": "O backup excede o limite da requisição. Aumente BODY_SIZE_LIMIT no servidor e tente novamente.",
+      "importStopped": "O servidor parou durante a importação e a desfez, então seus dados não mudaram. Importe o mesmo arquivo novamente quando o servidor voltar."
     },
     "statusLoadError": "Não foi possível carregar o status atual da infraestrutura. Atualize para tentar novamente.",
     "configLoadError": "Não foi possível carregar a configuração salva, então ela não pode ser editada aqui. Atualize para tentar novamente."

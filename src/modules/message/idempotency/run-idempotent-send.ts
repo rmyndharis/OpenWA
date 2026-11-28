@@ -1,7 +1,8 @@
+import { AsyncLocalStorage } from 'async_hooks';
 import { ConflictException, HttpException, HttpStatus, UnprocessableEntityException } from '@nestjs/common';
 import { createLogger } from '../../../common/services/logger.service';
 import { isEngineSendFailure } from '../../../common/errors/engine-send-failure';
-import { provesNothingSent } from '../../../common/errors/engine-not-sent.error';
+import { markNothingSent, provesNothingSent } from '../../../common/errors/engine-not-sent.error';
 import { EngineThrottledError } from '../../../common/errors/engine-throttled.error';
 import { hashSendRequest, SendIdempotencyService } from './send-idempotency.service';
 
@@ -86,21 +87,57 @@ export async function claimIdempotentSend(
   }
 }
 
+/**
+ * The hand-over of the claim the send running in this context owns (see handOverSend). A send started in this context
+ * before the claim's own reaches the engine would record it early; plugin hooks run in their workers, whose sends come
+ * back outside it.
+ */
+const handOvers = new AsyncLocalStorage<() => Promise<void>>();
+/** Errors handOverSend refused a send with. */
+const handOverRefusals = new WeakSet<object>();
+
 /** Run the send a claim owns and record how it ended: stored for replay, freed for a retry, or kept taken. */
 export async function runClaimedSend(
   store: SendIdempotencyService,
   id: string,
   send: () => Promise<unknown>,
 ): Promise<unknown> {
+  let handedOver = false;
+  const handOver = async (): Promise<void> => {
+    if (handedOver) return;
+    await store.handOver(id);
+    handedOver = true;
+  };
   let body: unknown;
   try {
-    body = await send();
+    body = await handOvers.run(handOver, send);
   } catch (error) {
     await settle(store, id, sendFailureProvesNothingSent(error) ? 'release' : 'fail');
     throw error;
   }
   await settle(store, id, 'complete', body);
   return body;
+}
+
+/**
+ * Called by a send right before it hands its message to the engine, so its claim says the message may go out from
+ * here: a claim left behind before this point is freed once stale, one after it never is. A refusal (the claim was
+ * taken over, or the database did not answer) is raised before anything went out. Without a claim it does nothing.
+ */
+export async function handOverSend(): Promise<void> {
+  const handOver = handOvers.getStore();
+  if (!handOver) return;
+  try {
+    await handOver();
+  } catch (error) {
+    if (error !== null && typeof error === 'object') handOverRefusals.add(error);
+    throw markNothingSent(error);
+  }
+}
+
+/** Whether handOverSend refused the error: the send stopped short of the engine, with no failure of its own to record. */
+export function isHandOverRefusal(error: unknown): boolean {
+  return error !== null && typeof error === 'object' && handOverRefusals.has(error);
 }
 
 /**

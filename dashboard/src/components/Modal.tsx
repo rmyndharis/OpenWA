@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
+import { useId, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { X } from 'lucide-react';
 import { bindModalA11y } from '../utils/modalA11y.ts';
 
@@ -55,17 +55,19 @@ export function Modal({
   // Keep the latest onClose in a ref so the open/close effect below can depend on `[open]` (and the stable
   // initial-focus ref object) only.
   // Callers commonly pass an inline arrow (`onClose={() => setShow(false)}`), which is a fresh
-  // reference on every parent render. If `onClose` were a useEffect dependency, the effect would
+  // reference on every parent render. If `onClose` were a dependency of that effect, it would
   // re-run on every keystroke that re-renders the parent — and because that effect performs the
   // initial-focus step, focus would be yanked back to the first focusable (the header close button)
   // after every character, making text inputs inside the modal unusable (issue #837). Reading via
   // the ref breaks that coupling without holding a stale handler.
   const onCloseRef = useRef(onClose);
-  useEffect(() => {
+  useLayoutEffect(() => {
     onCloseRef.current = onClose;
   });
 
-  useEffect(() => {
+  // Bound as the dialog is committed, before the browser can hand it a key: a passive effect runs after the dialog
+  // is on screen, and an Escape pressed in between would be lost.
+  useLayoutEffect(() => {
     if (!open || !cardRef.current) return undefined;
     return bindModalA11y(
       document,

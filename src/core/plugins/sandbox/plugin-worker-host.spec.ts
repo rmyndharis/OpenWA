@@ -2486,8 +2486,137 @@ describe('capability cancellation, unsettled zombie cap, idle liveness, and orig
 
         await expect(pending).resolves.toMatchObject({ ok: false, status: 504 });
         expect(capturedSignal?.aborted).toBe(true);
-        // Stale cap-result must not be posted back after the webhook dispatch timed out.
-        expect(ch.sent.filter(m => m.kind === 'cap-result')).toEqual([]);
+        // The worker is alive and its handler still awaits the call, so the call is answered as timed out.
+        expect(ch.sent.filter(m => m.kind === 'cap-result')).toEqual([
+          { kind: 'cap-result', id: 1, ok: false, error: 'webhook dispatch timed out after 5000ms' },
+        ]);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('holds a call cut off by the webhook deadline against the unsettled bound until its host work settles', async () => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+      try {
+        const ch = new FakeChannel();
+        const settlers: Array<(v: unknown) => void> = [];
+        // Work that ignores its AbortSignal, like a verb that cannot be cancelled.
+        const dispatcher = jest.fn(() => new Promise(resolve => settlers.push(resolve)));
+        const onLog = jest.fn();
+        // maxInFlightCaps = 1 (7th arg) -> ceiling for active + unsettled = 2.
+        const host = new PluginWorkerHost(ch, dispatcher, undefined, undefined, onLog, undefined, 1);
+        const overrun = async (capId: number): Promise<void> => {
+          const pending = host.dispatchWebhook({
+            instanceId: 'inst-1',
+            route: 'chatwoot',
+            method: 'POST',
+            headers: {},
+            query: {},
+            body: '{}',
+            rawBody: '{}',
+            verified: true,
+            deliveryId: `del-overrun-${capId}`,
+            sessionId: 'sess-1',
+            timeoutMs: 5000,
+          });
+          const sent = ch.last() as Extract<HostToWorkerMessage, { kind: 'webhook' }>;
+          ch.reply({
+            kind: 'cap',
+            id: capId,
+            verb: 'engine.getContacts',
+            args: ['sess-1'],
+            dispatchId: sent.dispatchId,
+          });
+          await microFlush();
+          jest.advanceTimersByTime(5000);
+          await expect(pending).resolves.toMatchObject({ ok: false, status: 504 });
+        };
+
+        await overrun(1);
+        await overrun(2);
+        expect(dispatcher).toHaveBeenCalledTimes(2);
+        expect(ch.sent.filter(m => m.kind === 'cap-result')).toMatchObject([
+          { id: 1, ok: false },
+          { id: 2, ok: false },
+        ]);
+
+        // Both calls were answered, but their work is still running: a third is refused at the ceiling.
+        ch.reply({ kind: 'cap', id: 3, verb: 'engine.getContacts', args: ['sess-1'] });
+        await microFlush();
+        expect(dispatcher).toHaveBeenCalledTimes(2);
+        expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 3)).toMatchObject({
+          ok: false,
+          error: expect.stringMatching(/too many unsettled timed-out/) as string,
+        });
+
+        // The first one settles late: warned once, and its place is free again.
+        settlers[0]({ late: true });
+        await microFlush();
+        expect(onLog).toHaveBeenCalledTimes(1);
+        expect(onLog).toHaveBeenCalledWith(
+          'warn',
+          expect.stringMatching(/late result was discarded/),
+          expect.objectContaining({ action: 'sandbox_cap_late_settle', verb: 'engine.getContacts' }),
+        );
+        ch.reply({ kind: 'cap', id: 4, verb: 'engine.getContacts', args: ['sess-1'] });
+        await microFlush();
+        expect(dispatcher).toHaveBeenCalledTimes(3);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('posts no cap-result for a call of a webhook dispatch once the worker is torn down, also past the deadline', async () => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+      try {
+        for (const mode of ['terminate', 'exit'] as const) {
+          const ch = new FakeChannel();
+          const signals: AbortSignal[] = [];
+          const onLog = jest.fn();
+          const dispatcher = jest.fn((_verb: string, _args: unknown[], _ctx?: unknown, signal?: AbortSignal) => {
+            if (signal) signals.push(signal);
+            return new Promise(() => undefined);
+          });
+          const host = new PluginWorkerHost(ch, dispatcher, undefined, undefined, onLog);
+
+          const pending = host.dispatchWebhook({
+            instanceId: 'inst-1',
+            route: 'chatwoot',
+            method: 'POST',
+            headers: {},
+            query: {},
+            body: '{}',
+            rawBody: '{}',
+            verified: true,
+            deliveryId: `del-teardown-${mode}`,
+            sessionId: 'sess-1',
+            timeoutMs: 5000,
+          });
+          const sent = ch.sent.find(m => m.kind === 'webhook') as Extract<HostToWorkerMessage, { kind: 'webhook' }>;
+          ch.reply({
+            kind: 'cap',
+            id: 1,
+            verb: 'engine.getContacts',
+            args: ['sess-1'],
+            dispatchId: sent.dispatchId,
+          });
+          await microFlush();
+          expect(signals).toHaveLength(1);
+
+          if (mode === 'terminate') {
+            await host.terminate();
+          } else {
+            ch.crash(1);
+          }
+          expect(signals[0].aborted).toBe(true);
+
+          // The dispatch deadline passes after the teardown: the worker is gone, so nothing is posted to it.
+          jest.advanceTimersByTime(5000);
+          await microFlush();
+          await expect(pending).resolves.toMatchObject({ ok: false });
+          expect(ch.sent.filter(m => m.kind === 'cap-result')).toEqual([]);
+          expect(onLog).not.toHaveBeenCalled();
+        }
       } finally {
         jest.useRealTimers();
       }
@@ -2552,6 +2681,136 @@ describe('capability cancellation, unsettled zombie cap, idle liveness, and orig
       } finally {
         jest.useRealTimers();
       }
+    });
+
+    describe('which timeout a call cut off by the webhook deadline reports', () => {
+      const webhook = (host: PluginWorkerHost, onTimeout: () => void) =>
+        host.dispatchWebhook({
+          instanceId: 'inst-1',
+          route: 'chatwoot',
+          method: 'POST',
+          headers: {},
+          query: {},
+          body: '{}',
+          rawBody: '{}',
+          verified: true,
+          deliveryId: 'del-race-1',
+          sessionId: 'sess-1',
+          timeoutMs: 5000,
+          onTimeout,
+        });
+      const hangingUntilAborted = () =>
+        jest.fn(
+          (_verb: string, _args: unknown[], _ctx?: unknown, signal?: AbortSignal) =>
+            new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('aborted')))),
+        );
+      const capResults = (ch: FakeChannel) => ch.sent.filter(m => m.kind === 'cap-result');
+      const hostWith = (ch: FakeChannel, capTimeoutMs: number) =>
+        new PluginWorkerHost(
+          ch,
+          hangingUntilAborted(),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          capTimeoutMs,
+        );
+
+      it('is the dispatch timeout, for the plugin and the delivery, when the call timer runs first', async () => {
+        jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+        try {
+          const ch = new FakeChannel();
+          const onTimeout = jest.fn();
+          const host = hostWith(ch, 30000);
+          const pending = webhook(host, onTimeout);
+          const sent = ch.sent.find(m => m.kind === 'webhook') as Extract<HostToWorkerMessage, { kind: 'webhook' }>;
+
+          // The wall clock runs ahead of the timers (a clock step; by a millisecond, rounding), so the timer the
+          // call gets for the dispatch's remaining budget comes due before the dispatch timer.
+          jest.setSystemTime(Date.now() + 2000);
+          ch.reply({
+            kind: 'cap',
+            id: 1,
+            verb: 'conversation.send',
+            args: [{ sessionId: 'sess-1', chatId: '123@c.us', type: 'text', text: 'hello' }],
+            dispatchId: sent.dispatchId,
+          });
+          await microFlush();
+          jest.advanceTimersByTime(3000);
+          await microFlush();
+          // The handler rethrows what the call it awaited rejected with, and so fails the delivery.
+          const answered = capResults(ch)[0];
+          const thrown = answered?.ok === false ? answered.error : 'not answered';
+          ch.reply({ kind: 'webhook-result', id: sent.id, status: 500, error: thrown });
+
+          await expect(pending).resolves.toEqual({ ok: false, status: 504 });
+          expect(capResults(ch)).toEqual([
+            { kind: 'cap-result', id: 1, ok: false, error: 'webhook dispatch timed out after 5000ms' },
+          ]);
+          expect(onTimeout).toHaveBeenCalledTimes(1);
+
+          // The dispatch timer, when it comes due, finds the dispatch already ended.
+          jest.advanceTimersByTime(2000);
+          await microFlush();
+          expect(onTimeout).toHaveBeenCalledTimes(1);
+          expect(capResults(ch)).toHaveLength(1);
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+
+      it('is the dispatch timeout for a call still running after its handler returned', async () => {
+        jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+        try {
+          const ch = new FakeChannel();
+          const onTimeout = jest.fn();
+          const host = hostWith(ch, 30000);
+          const pending = webhook(host, onTimeout);
+          const sent = ch.sent.find(m => m.kind === 'webhook') as Extract<HostToWorkerMessage, { kind: 'webhook' }>;
+          ch.reply({ kind: 'cap', id: 1, verb: 'engine.getContacts', args: ['sess-1'], dispatchId: sent.dispatchId });
+          await microFlush();
+          ch.reply({ kind: 'webhook-result', id: sent.id, status: 200 });
+          await expect(pending).resolves.toMatchObject({ ok: true, status: 200 });
+
+          jest.advanceTimersByTime(5000);
+          await microFlush();
+
+          expect(capResults(ch)).toEqual([
+            { kind: 'cap-result', id: 1, ok: false, error: 'webhook dispatch timed out after 5000ms' },
+          ]);
+          expect(onTimeout).not.toHaveBeenCalled();
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+
+      it("is the call's own timeout when its own budget is the shorter one, and the dispatch runs on", async () => {
+        jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+        try {
+          const ch = new FakeChannel();
+          const onTimeout = jest.fn();
+          const host = hostWith(ch, 100);
+          const pending = webhook(host, onTimeout);
+          const sent = ch.sent.find(m => m.kind === 'webhook') as Extract<HostToWorkerMessage, { kind: 'webhook' }>;
+          ch.reply({ kind: 'cap', id: 1, verb: 'engine.getContacts', args: ['sess-1'], dispatchId: sent.dispatchId });
+          await microFlush();
+
+          jest.advanceTimersByTime(100);
+          await microFlush();
+          expect(capResults(ch)).toEqual([
+            { kind: 'cap-result', id: 1, ok: false, error: "capability 'engine.getContacts' timed out after 100ms" },
+          ]);
+
+          ch.reply({ kind: 'webhook-result', id: sent.id, status: 200 });
+          await expect(pending).resolves.toMatchObject({ ok: true, status: 200 });
+          expect(onTimeout).not.toHaveBeenCalled();
+        } finally {
+          jest.useRealTimers();
+        }
+      });
     });
 
     it('deduplicates outbound send caps across webhook retry boundaries using a deterministic per-dispatch key', async () => {

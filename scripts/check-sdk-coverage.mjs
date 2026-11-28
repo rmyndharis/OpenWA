@@ -20,6 +20,10 @@
  *     not that its body or response match. A call the scan cannot pair with its path (the messages
  *     send-<type> helpers, binary downloads, Go's service helpers and `path :=` variables) is not
  *     verb-checked, so a wrong verb on a single-verb route built that way passes.
+ *   - Every query parameter an in-scope operation declares is sent by at least one call to it in each
+ *     client (not by every method that calls it), and no call sends a key its operation does not
+ *     declare; the known gaps are data (see QUERY_GAPS). A PHP method that passes its own array
+ *     parameter through sends whatever its caller gives it, so it counts as sending them all.
  *   - The exclusion list is PARSED from sdk/README.md, so the gate and the promise cannot drift.
  *
  * The harvester is deliberately GENEROUS: it over-approximates what each client builds. That is the
@@ -31,7 +35,7 @@
  *
  * Run locally: `npm run check:sdk-coverage`.
  */
-import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isUnexposedPath, unexposedResources } from './check-contract-shapes.mjs';
@@ -343,8 +347,11 @@ export function undeclaredVerbPairs(sdkName, pairs, specByPath) {
   return out;
 }
 
-/** Stale routes built by Go or Java clients that no longer exist in the OpenAPI contract. */
-export function staleRouteErrors(sdkName, dir, specByPath, contractShapes) {
+/**
+ * Stale routes built by Go or Java clients that no longer exist in the OpenAPI contract. Every call
+ * whose path resolves is also added to `querySites` with its query argument, for the query layer.
+ */
+export function staleRouteErrors(sdkName, dir, specByPath, contractShapes, querySites = []) {
   const out = [];
   const quoteOpts = { allowBacktick: sdkName === 'go', allowSingleQuote: true };
   const hasContractOrPrefix = (shape) => {
@@ -970,10 +977,13 @@ export function staleRouteErrors(sdkName, dir, specByPath, contractShapes) {
         : /\.do(?:Raw)?\(\s*[A-Za-z_][\w.]*(?:\([^)]*\))?\s*,\s*"(GET|POST|PUT|PATCH|DELETE)"\s*,\s*/g;
     for (const call of text.matchAll(callRe)) {
       const rawExpr = readCommaArg(text, call.index + call[0].length);
+      // Both clients take the query right after the path: do(ctx, verb, path, query, ...), request(verb, path, query, ...).
+      const queryExpr = splitArgs(text.slice(call.index + call[0].length))[1];
       for (const branch of resolveExprBranches(rawExpr, state.locals, opts)) {
         if (opts.isUnexported && branch.usesHelperParam) continue;
         if (branch.expr.startsWith('/api/')) {
           const normPath = normalize(branch.expr);
+          querySites.push({ verb: call[1], path: normPath, expr: queryExpr, scope: opts.scope });
           if (!isCheckedRouteFamily(normPath) && !specByPath.has(normPath)) {
             out.push(`${call[1]} ${normPath}: built by ${sdkName}, not present in the contract`);
           }
@@ -1299,7 +1309,7 @@ export function staleRouteErrors(sdkName, dir, specByPath, contractShapes) {
         }
       }
       for (const method of extractJavaMethods(src)) {
-        analyzeBody(method.body, { isUnexported: false });
+        analyzeBody(method.body, { isUnexported: false, scope: `${method.params}\n${method.body}` });
       }
     }
   } else if (sdkName === 'go') {
@@ -1379,7 +1389,7 @@ export function staleRouteErrors(sdkName, dir, specByPath, contractShapes) {
       for (const fn of extractGoFunctions(source)) {
         const isUnexported = /^[a-z]/.test(fn.name);
         const helperParamNames = isUnexported ? parseParamNames(fn.params) : new Set();
-        analyzeBody(fn.body, { bases, helperParamNames, isUnexported });
+        analyzeBody(fn.body, { bases, helperParamNames, isUnexported, scope: `${fn.params}\n${fn.body}` });
       }
       for (const m of source.matchAll(/\.membershipRequestAction\(\s*ctx\s*,\s*\w+\s*,\s*\w+\s*,\s*"([\w-]+)"/g)) {
         const target = `/api/sessions/*/groups/*/membership-requests/${m[1]}`;
@@ -1394,28 +1404,159 @@ export function staleRouteErrors(sdkName, dir, specByPath, contractShapes) {
   return out;
 }
 
-const verbPairsOf = (sdk) => {
+/** JavaScript, Python and PHP calls with their query argument (group 3) are added to `querySites`. */
+const verbPairsOf = (sdk, querySites = []) => {
   if (sdk.name === 'go') return goVerbPairs(join(root, sdk.dir));
   const pairs = new Set();
   for (const file of walk(join(root, sdk.dir), sdk.exts)) {
     const src = readFileSync(file, 'utf8');
     const patterns =
       sdk.name === 'javascript'
-        ? [/(GET|POST|PUT|PATCH|DELETE)'\s*,\s*[\s\S]{0,80}?path:\s*[`'"]([^`'"]+)[`'"]/g]
+        ? [/(GET|POST|PUT|PATCH|DELETE)'\s*,\s*[\s\S]{0,80}?path:\s*[`'"]([^`'"]+)[`'"](?:\s*,\s*(query\b(?:\s*:\s*(?:\{[^}]*\}|\w+))?))?/g]
         : sdk.name === 'python'
-          ? [/\.request\(\s*"(GET|POST|PUT|PATCH|DELETE)"\s*,\s*((?:f?"[^"\n]*"\s*)+)/g]
+          ? [/\.request\(\s*"(GET|POST|PUT|PATCH|DELETE)"\s*,\s*((?:f?"[^"\n]*"\s*)+)(?:,\s*query=(\{[^}]*\}|\w+))?/g]
           : sdk.name === 'php'
-            ? [/->request(?:Array|NullableArray)?\(\s*'(GET|POST|PUT|PATCH|DELETE)'\s*,\s*['"]([^'"]+)['"]/g]
+            ? [/->request(?:Array|NullableArray)?\(\s*'(GET|POST|PUT|PATCH|DELETE)'\s*,\s*['"]([^'"]+)['"](?:\s*,\s*(\[[^\]]*\]|\$\w+))?/g]
             : [/HttpMethod\.(GET|POST|PUT|PATCH|DELETE)\s*,\s*([\s\S]{2,400}?)\s*,\s*\n?\s*(?:null|new |Map\.|Collections\.|[a-z]\w)/g];
     for (const re of patterns) {
       for (const m of src.matchAll(re)) {
         const path = sdk.name === 'java' ? literalsToPath(m[2]) : sdk.name === 'python' ? joinPythonLiterals(m[2]) : m[2];
-        if (path && path.startsWith('/api/')) pairs.add(`${m[1]} ${normalize(path)}`);
+        if (path && path.startsWith('/api/')) {
+          pairs.add(`${m[1]} ${normalize(path)}`);
+          if (sdk.name !== 'java') querySites.push({ verb: m[1], path: normalize(path), expr: m[3], scope: src.slice(0, m.index) });
+        }
       }
     }
   }
   return pairs;
 };
+
+// ─── Query layer ─────────────────────────────────────────────────────────────────────────────
+// The path and verb layers never read an operation's parameters, so a query parameter the server
+// renamed or dropped left every client sending the old key with all of them green: a keyset page
+// walk that sends `after` to a server reading `cursor` re-reads its first page forever. This layer
+// collects the keys each client call sends and compares them with the names the operation
+// declares, in both directions. A declared name a client does not send yet is listed in
+// QUERY_GAPS, and the list only shrinks: a new gap fails, and so does an entry that is no longer
+// one. PHP's list methods pass a caller's array through without naming any key, so all of their
+// parameters are listed; a renamed parameter still fails there, through its stale entry.
+// `node scripts/check-sdk-coverage.mjs --update-query-gaps` rewrites the list from the current gaps.
+/** What a client sends when it passes a caller's query array through unchanged (PHP). */
+const FORWARDS_CALLER_QUERY = '*caller*';
+
+const QUERY_GAPS = join(root, 'scripts/sdk-query-parameter-gaps.json');
+
+/** The top-level comma-separated items of `s`, up to the bracket that closes it; quoted text is kept whole. */
+const splitArgs = (s) => {
+  const items = [];
+  let depth = 0;
+  let start = 0;
+  let quote = null;
+  let i = 0;
+  for (; i < s.length; i++) {
+    const c = s[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = null;
+    } else if ('"\'`'.includes(c)) quote = c;
+    else if ('([{'.includes(c)) depth++;
+    else if (')]}'.includes(c) && --depth < 0) break;
+    else if (c === ',' && depth === 0) {
+      items.push(s.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  items.push(s.slice(start, i).trim());
+  return items.filter(Boolean);
+};
+
+/** Comments and docstrings removed; PHP keeps its docblocks, which carry the array shapes. */
+const cleanSource = (sdk, text) =>
+  sdk === 'php' ? text : sdk === 'python' ? text.replace(/"""[\s\S]*?"""/g, '').replace(/^\s*#.*$/gm, '') : strip(text);
+
+const keysOf = (re, text) => [...(text ?? '').matchAll(re)].map((k) => k[1]);
+
+/**
+ * The keys one client call puts in its query string: read from a literal map, or from the declared
+ * type of the variable it passes (a TypeScript interface, a Python TypedDict, a Go values() method,
+ * a Java record, a PHP docblock array shape). `scope` is the code that declares the variable and
+ * `all` the client's cleaned sources. What cannot be resolved names no key, so its parameters
+ * surface as gaps instead of passing unseen.
+ */
+export function queryKeys(sdk, expr, scope, all) {
+  let arg = (expr ?? '').trim();
+  if (sdk === 'javascript') arg = arg.replace(/^query\s*:\s*/, '');
+  const literal = {
+    javascript: /^\{([\s\S]*)\}$/,
+    python: /^\{([\s\S]*)\}$/,
+    php: /^\[([\s\S]*)\]$/,
+    go: /^url\.Values\{([\s\S]*)\}$/,
+    java: /^(?:java\.util\.)?Map\.of\(([\s\S]*)\)$/,
+  }[sdk].exec(arg);
+  if (literal) {
+    // Map.of alternates keys and values.
+    const entries = splitArgs(literal[1]).filter((_, i) => sdk !== 'java' || i % 2 === 0);
+    return entries.map((e) => /^["']?(\w+)/.exec(e)?.[1]).filter(Boolean);
+  }
+  scope = cleanSource(sdk, scope ?? '');
+  const last = (pattern) => [...scope.matchAll(new RegExp(pattern, 'g'))].at(-1);
+
+  if (sdk === 'go') {
+    const typed = /^(?:valuesOf\((\w+)\)|(\w+)\.values\(\))$/.exec(arg);
+    if (typed) {
+      const type = last(`\\b${typed[1] ?? typed[2]}\\s+\\*?(\\w+)`)?.[1];
+      const values = type && new RegExp(`func \\(\\w+ \\*?${type}\\) values\\(\\) url\\.Values \\{([\\s\\S]*?)\\n\\}`).exec(all);
+      return keysOf(/(?:\bset\w*\(\s*\w+\s*,|\.(?:Set|Add)\()\s*"([^"]+)"/g, values?.[1]);
+    }
+    if (!/^\w+$/.test(arg)) return [];
+    // A local built from another query, plus what it sets and minus what it deletes:
+    // `values := query.values(); values.Del("sessionId")`.
+    const dropped = keysOf(new RegExp(`\\b${arg}\\.Del\\("([^"]+)"\\)`, 'g'), scope);
+    const added = keysOf(new RegExp(`\\b${arg}\\.(?:Set|Add)\\("([^"]+)"`, 'g'), scope);
+    const rhs = last(`\\b${arg}\\s*(?::=|=(?!=))\\s*(.+)`)?.[1];
+    return [...(rhs ? queryKeys(sdk, rhs, scope, all) : []), ...added].filter((k) => !dropped.includes(k));
+  }
+  if (sdk === 'php') {
+    if (!/^\$\w+$/.test(arg)) return [];
+    const shape = last(`@param\\s+(array\\{[^}]*\\}|\\S+)\\s+\\$${arg.slice(1)}\\b`)?.[1];
+    if (shape?.startsWith('array{')) return keysOf(/(\w+)\??\s*:/g, shape);
+    // The method's own array parameter, passed through, carries whatever keys its caller gives it.
+    const signature = last('function\\s+\\w+\\s*\\(([^)]*)\\)')?.[1] ?? '';
+    return new RegExp(`\\barray\\s+\\${arg}\\b`).test(signature) ? [FORWARDS_CALLER_QUERY] : [];
+  }
+  if (!/^\w+$/.test(arg)) return [];
+  if (sdk === 'javascript') {
+    const interfaceKeys = (type) => {
+      const m = new RegExp(`interface ${type}\\b(?:\\s+extends\\s+([\\w\\s,]+?))?\\s*\\{([\\s\\S]*?)\\n\\}`).exec(all);
+      return m ? [...(m[1]?.split(',') ?? []).flatMap((base) => interfaceKeys(base.trim())), ...keysOf(/^\s*(\w+)\??:/gm, m[2])] : [];
+    };
+    const type = last(`\\b${arg}\\??\\s*:\\s*(?:(?:Readonly|Partial|Required)<\\s*)*(\\w+)`)?.[1];
+    return type ? interfaceKeys(type) : [];
+  }
+  if (sdk === 'python') {
+    const typedDictKeys = (type) => {
+      const functional = new RegExp(`\\b${type}\\s*=\\s*TypedDict\\(\\s*"${type}"\\s*,\\s*\\{([^}]*)\\}`).exec(all);
+      if (functional) return keysOf(/"(\w+)"\s*:/g, functional[1]);
+      const cls = new RegExp(`^class ${type}\\(([^)]*)\\)[^\\n]*\\n((?:[ \\t]+.*\\n|[ \\t]*\\n)*)`, 'm').exec(all);
+      if (!cls) return [];
+      const bases = cls[1].split(',').map((b) => b.trim()).filter((b) => /^\w+$/.test(b) && b !== 'TypedDict');
+      return [...bases.flatMap(typedDictKeys), ...keysOf(/^[ \t]+(\w+)\s*:/gm, cls[2])];
+    };
+    const type = last(`\\b${arg}\\s*:\\s*(?:(?:typing\\.)?Optional\\[\\s*)*(\\w+)`)?.[1];
+    return type ? typedDictKeys(type) : [];
+  }
+  // Java: the record components of the variable's declared type. String contents are blanked first:
+  // a message such as "Search params must not be null." reads like a declaration of `params`.
+  scope = scope.replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
+  const decl = last(`\\b([A-Z]\\w*)\\s+${arg}\\b(?:\\s*=\\s*([^;]+))?`);
+  const record = decl && new RegExp(`record ${decl[1]}\\(([^)]*)\\)`).exec(all);
+  if (!record) return [];
+  const components = record[1].split(',').map((p) => /(\w+)\s*$/.exec(p)?.[1]);
+  // A component constructed as a literal null is never sent: the query writer skips null members.
+  const ctor = new RegExp(`new\\s+${decl[1]}\\(([\\s\\S]*)\\)\\s*$`).exec(decl[2]?.trim() ?? '');
+  const args = ctor ? splitArgs(ctor[1]) : [];
+  return components.filter((c, i) => c && !(args.length === components.length && args[i] === 'null'));
+}
 
 // A spec imports the helpers above; only a direct run reports and exits. argv[1] is realpathed because
 // Node realpaths the main module's URL: through a symlinked path the two never matched and nothing ran.
@@ -1429,8 +1570,9 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     if (verbs.length > 1) multi.push({ path: raw, verbs });
   }
   const verbErrors = [];
+  const querySites = {};
   for (const sdk of SDKS) {
-    const pairs = verbPairsOf(sdk);
+    const pairs = verbPairsOf(sdk, (querySites[sdk.name] = []));
     // Non-vacuity: a regex that stopped matching yields an empty set and the layer goes blind.
     if (pairs.size < 60) verbErrors.push(`${sdk.name}: harvested only ${pairs.size} verb/path pairs — the verb scan has drifted.`);
     for (const { path, verbs } of multi) {
@@ -1441,7 +1583,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     // Checked against the whole contract: a client that builds an excluded route still owes it a real verb.
     verbErrors.push(...undeclaredVerbPairs(sdk.name, pairs, specByPath));
     if (sdk.name === 'go' || sdk.name === 'java') {
-      verbErrors.push(...staleRouteErrors(sdk.name, join(root, sdk.dir), specByPath, contractShapes));
+      verbErrors.push(...staleRouteErrors(sdk.name, join(root, sdk.dir), specByPath, contractShapes, querySites[sdk.name]));
     }
   }
   if (multi.length < 15) {
@@ -1461,5 +1603,56 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     console.error('Add the client method, or add the resource to that list with a reason.\n');
     process.exit(1);
   }
+
+  // Query layer, after the path layer so a missing route is reported as that first: see QUERY_GAPS.
+  const queryErrors = [];
+  const gaps = [];
+  for (const sdk of SDKS) {
+    const all = walk(join(root, sdk.dir), sdk.exts)
+      .filter((f) => !f.endsWith('_test.go'))
+      .map((f) => cleanSource(sdk.name, readFileSync(f, 'utf8')))
+      .join('\n');
+    for (const [path, item] of Object.entries(spec)) {
+      for (const verb of VERBS.filter((v) => item[v.toLowerCase()])) {
+        const declared = (item[verb.toLowerCase()].parameters ?? []).filter((p) => p.in === 'query').map((p) => p.name);
+        const sent = new Set(
+          querySites[sdk.name]
+            .filter((site) => site.verb === verb && site.path === normalize(path))
+            .flatMap((site) => queryKeys(sdk.name, site.expr, site.scope, all)),
+        );
+        const forwarded = sent.delete(FORWARDS_CALLER_QUERY);
+        for (const name of sent) {
+          if (!declared.includes(name)) queryErrors.push(`${verb} ${path} query "${name}": sent by ${sdk.name}, not declared by the contract`);
+        }
+        if (isUnexposedPath(normalize(path), excluded)) continue;
+        for (const name of declared) if (!forwarded && !sent.has(name)) gaps.push({ sdk: sdk.name, method: verb, path, parameter: name });
+      }
+    }
+  }
+  const gapId = (g) => `${g.sdk} ${g.method} ${g.path} ${g.parameter}`;
+  const gapsFile = relative(root, QUERY_GAPS);
+  if (process.argv.includes('--update-query-gaps')) {
+    gaps.sort((a, b) => gapId(a).localeCompare(gapId(b)));
+    const body = gaps.map((g) => `  ${JSON.stringify(g)}`).join(',\n');
+    writeFileSync(QUERY_GAPS, body ? `[\n${body}\n]\n` : '[]\n');
+    console.log(`Wrote ${gaps.length} query parameter gaps to ${gapsFile}: read the diff before committing it.`);
+    process.exit(0);
+  }
+  const listed = JSON.parse(readFileSync(QUERY_GAPS, 'utf8'));
+  const listedIds = new Set(listed.map(gapId));
+  const gapIds = new Set(gaps.map(gapId));
+  for (const g of gaps) {
+    if (!listedIds.has(gapId(g))) queryErrors.push(`${g.method} ${g.path} query "${g.parameter}": declared by the contract, sent by no ${g.sdk} call`);
+  }
+  for (const g of listed) {
+    if (!gapIds.has(gapId(g))) queryErrors.push(`${g.method} ${g.path} query "${g.parameter}": listed as missing from ${g.sdk} in ${gapsFile}, but it is not: remove the entry`);
+  }
+  if (queryErrors.length) {
+    console.error('\n✖ SDK query parameters disagree with the contract:');
+    for (const e of queryErrors) console.error(`  - ${e}`);
+    console.error(`\nSend the declared name from the client method, or, while a parameter stays unexposed, list it in ${gapsFile}.\n`);
+    process.exit(1);
+  }
+
   console.log(`✓ SDK contract coverage OK (${inScope.length} in-scope contract paths reachable from all ${SDKS.length} clients).`);
 }

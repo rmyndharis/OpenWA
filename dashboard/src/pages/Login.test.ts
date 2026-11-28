@@ -13,6 +13,9 @@ let sentKey: string | null = null;
 let sentUrl: string | null = null;
 let sentCredentials: RequestCredentials | undefined;
 let reply: () => Response = okReply;
+// The GET that follows a successful exchange: it only succeeds when the browser kept the session cookie.
+let confirmReply: () => Response = okReply;
+const requests: string[] = [];
 
 function okReply(): Response {
   return new Response(
@@ -25,7 +28,11 @@ function okReply(): Response {
 
 function installFetchStub(): void {
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    sentUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const method = init?.method ?? 'GET';
+    requests.push(`${method} ${url}`);
+    if (method === 'GET') return Promise.resolve(confirmReply());
+    sentUrl = url;
     sentKey = new Headers(init?.headers).get('X-API-Key');
     sentCredentials = init?.credentials;
     return Promise.resolve(reply());
@@ -52,6 +59,8 @@ afterEach(() => {
   sentUrl = null;
   sentCredentials = undefined;
   reply = okReply;
+  confirmReply = okReply;
+  requests.length = 0;
   sessionStorage.clear();
   localStorage.clear();
   rtl.cleanup();
@@ -73,6 +82,7 @@ test('a key pasted with surrounding whitespace is exchanged at /auth/session tri
   assert.equal(sentUrl, '/api/auth/session');
   assert.equal(sentKey, 'owa_k1_secret');
   assert.equal(sentCredentials, 'include');
+  assert.deepEqual(requests, ['POST /api/auth/session', 'GET /api/auth/session']);
   assert.deepEqual(logins, [
     { role: 'admin', engineType: 'baileys', scoped: false, apiKeyId: 'key-admin-1', deniedPermissions: [] },
   ]);
@@ -123,6 +133,19 @@ test('a refused key keeps the reason the gateway gave', async () => {
 test('a 401 without a message reads as an invalid key', async () => {
   reply = () => new Response('', { status: 401 });
   assert.equal(await submitAndReadError(), 'Invalid API key');
+  assert.deepEqual(requests, ['POST /api/auth/session']);
+});
+
+// A browser that refuses the session cookie (an API on another site, blocked third-party cookies, a Secure cookie on
+// a plain-http page) still gets a 200 from the exchange, and every request after it answers 401.
+test('an exchange whose session cookie the browser did not keep stays on the form and says why', async () => {
+  confirmReply = () =>
+    new Response(JSON.stringify({ statusCode: 401, message: 'Session is required' }), { status: 401 });
+  assert.equal(
+    await submitAndReadError(),
+    'The key was accepted, but this browser did not keep the session cookie. The dashboard and the API must be on the same site, or served from the same origin.',
+  );
+  assert.deepEqual(requests, ['POST /api/auth/session', 'GET /api/auth/session']);
 });
 
 // A 200 that is not the gateway's answer (a reverse proxy serving the app's HTML for a misrouted /api) or that does not
