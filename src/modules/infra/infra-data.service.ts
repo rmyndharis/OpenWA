@@ -1658,6 +1658,9 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
       if (rolledBack) return rolledBack;
 
       return await asOwner(async () => {
+        // Ahead of the callers the restore held: a session row write kept from before the import is about the row it
+        // replaced.
+        this.sessionService?.forgetRestoredRows?.(importedSessionIds);
         // The replace removed these sessions without a delete, so what this process keeps for them goes here.
         for (const { id } of retired) this.sessionService?.forgetSession(id);
         // Retained live sessions and force-kept orphans bypass forgetSession() above, so clear all cached

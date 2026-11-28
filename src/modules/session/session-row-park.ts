@@ -8,6 +8,7 @@ import {
   type RecoveryRecord,
 } from '../../common/utils/recovery-queue';
 import { type createLogger } from '../../common/services/logger.service';
+import { sharedConnectionHeld } from '../../common/utils/shared-connection';
 import type { SessionOwnershipService } from './session-ownership.service';
 
 /** The session-row columns whose refused writes are kept, one kept write per session and column. */
@@ -264,6 +265,18 @@ export class SessionRows {
   }
 
   /**
+   * A data import replaced the session's row: what this process kept for the row it replaced goes. What it knew of the
+   * row stays the guard of a blind write refused from now on: newer than the import, that write lands where the restored
+   * row holds the value it knew, and nowhere else.
+   */
+  restored(sessionId: string): void {
+    const queue = this.deps.queue;
+    for (const record of [...(queue?.records('session') ?? [])] as Array<RecoveryRecord & { key: string }>) {
+      if (record.sessionId === sessionId) queue!.settle('session', record.key);
+    }
+  }
+
+  /**
    * Land what is kept of a session now, before this node hands its claim back: the writes kept under that claim land
    * only while it stands. Answers whether nothing is left; while something is, the claim is not handed back.
    */
@@ -307,6 +320,8 @@ export class SessionRows {
     const { sessionId, write } = record;
     // The claim it was written under ended: whatever was written since is newer.
     if (record.claim && !record.claim()) return true;
+    // A restore holds the connection: issued now, the write would land on the row it puts back (see restored()).
+    if (sharedConnectionHeld()) return false;
     const owners: FindOptionsWhere<Session>[] = write.owners?.map(nodeId => ({ nodeId: nodeId ?? IsNull() })) ?? [{}];
     const { connectedAt, lastActiveAt, pushName } = write.with ?? {};
     const columns: QueryDeepPartialEntity<Session> = {

@@ -45,6 +45,7 @@ import { SessionOwnershipService } from '../session/session-ownership.service';
 import { SessionService, linkPreviewDefault } from '../session/session.service';
 import { MessageProjector } from '../session/message-projector.service';
 import { isDatabaseUnavailable, type RecoveryLoss, type RecoveryRecord } from '../../common/utils/recovery-queue';
+import { sharedConnectionHeld } from '../../common/utils/shared-connection';
 import {
   HookExecutionError,
   HookManager,
@@ -177,6 +178,8 @@ class KeptReap implements RecoveryRecord {
   }
 
   async retry(): Promise<boolean> {
+    // Not while a restore holds the connection: it would run on the batches the restore puts back.
+    if (sharedConnectionHeld()) return false;
     await this.steps.reap();
     return true;
   }

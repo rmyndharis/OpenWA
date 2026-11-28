@@ -2206,6 +2206,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     this.engineLifecycle.forgetSession(id);
   }
 
+  /** A data import replaced the rows of these sessions: what this process kept for the rows before goes. */
+  forgetRestoredRows(ids: Iterable<string>): void {
+    for (const id of ids) this.engineLifecycle.rows?.restored(id);
+  }
+
   /**
    * Stop engines for session ids whose DB row is about to be replaced by an infra import.
    * Owned by the lifecycle service; see SessionEngineLifecycle.stopOrphanEngines(). A stop request
