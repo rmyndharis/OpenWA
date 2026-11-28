@@ -1,13 +1,12 @@
-// The pause before a launch's one retry: a test that sets `mockRetryPause` runs it at once, after its hook.
-let mockRetryPause: (() => void) | undefined;
+// The pause before a launch's one retry: a test that sets `mockRetryPause` ends it as soon as its hook is done.
+let mockRetryPause: (() => void | Promise<void>) | undefined;
 jest.mock('node:timers/promises', () => {
   const actual = jest.requireActual<typeof import('node:timers/promises')>('node:timers/promises');
   return {
     ...actual,
     setTimeout: (ms: number, value?: unknown) => {
       if (!mockRetryPause) return actual.setTimeout(ms, value);
-      mockRetryPause();
-      return Promise.resolve(value);
+      return Promise.resolve(mockRetryPause()).then(() => value);
     },
   };
 });
@@ -408,6 +407,35 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       expect((await rowOf()).status).toBe(SessionStatus.FAILED);
     });
 
+    it('refused while an earlier write of the column was on its way stays kept when that one lands', async () => {
+      const node = boot();
+      await node.lifecycle.updateStatus(id, SessionStatus.READY);
+      refuse = patch => ('status' in patch ? unavailable() : undefined);
+      await expect(node.lifecycle.updateStatus(id, SessionStatus.DISCONNECTED)).rejects.toThrow('disk I/O error');
+      refuse = undefined;
+      // The engine came back, and its READY lands well before the answer comes back. Meanwhile the engine fails, and
+      // the database refuses that FAILED.
+      let answer!: () => void;
+      const answered = new Promise<void>(resolve => (answer = resolve));
+      let landed = false;
+      afterWrite = patch => {
+        if (patch.status !== SessionStatus.READY) return Promise.resolve();
+        landed = true;
+        return answered;
+      };
+      const ready = node.lifecycle.updateStatus(id, SessionStatus.READY);
+      await until(() => landed);
+      refuse = patch => ('status' in patch ? unavailable() : undefined);
+      await expect(node.lifecycle.updateStatus(id, SessionStatus.FAILED)).rejects.toThrow('disk I/O error');
+      refuse = undefined;
+      answer();
+      await ready;
+
+      await node.queue.flush();
+
+      expect((await rowOf()).status).toBe(SessionStatus.FAILED);
+    });
+
     it('of a session deleted meanwhile is dropped with it, and nothing is lost', async () => {
       const node = await keptFailed();
 
@@ -469,6 +497,46 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       expect((await rowOf()).status).toBe(SessionStatus.DISCONNECTED);
     });
 
+    it('kept as a start runs is settled by the status the timeout of that start writes', async () => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+      const node = boot();
+      let events: EngineEventCallbacks | undefined;
+      node.engine.initialize.mockImplementation((callbacks: EngineEventCallbacks) => {
+        events = callbacks;
+        return new Promise<void>(() => undefined);
+      });
+      const started = node.lifecycle.start(id).catch((error: unknown) => error);
+      await until(() => events !== undefined);
+      // The engine shows a QR whose status the database refuses, and never finishes starting.
+      refuse = patch => ('status' in patch ? unavailable() : undefined);
+      events!.onQRCode!('qr');
+      await until(() => keptOf(node, 'status') !== undefined);
+      refuse = undefined;
+
+      await jest.advanceTimersByTimeAsync(resolveEngineInitTimeoutMs());
+      await started;
+
+      expect((await rowOf()).status).toBe(SessionStatus.DISCONNECTED);
+      expect([...node.queue.records('session')]).toHaveLength(0);
+    });
+
+    it('kept as a launch starts is settled by the status the retirement of that launch writes', async () => {
+      const node = boot();
+      await node.lifecycle.updateStatus(id, SessionStatus.INITIALIZING);
+      node.registry.set(id, node.engine as never);
+      refuse = patch => ('status' in patch ? unavailable() : undefined);
+      await expect(node.lifecycle.updateStatus(id, SessionStatus.QR_READY)).rejects.toThrow('disk I/O error');
+      refuse = undefined;
+      const controls = (
+        node.lifecycle as unknown as { controls: { retireLaunchedEngine(id: string, e: unknown): Promise<void> } }
+      ).controls;
+
+      await controls.retireLaunchedEngine(id, node.engine);
+
+      expect((await rowOf()).status).toBe(SessionStatus.DISCONNECTED);
+      expect([...node.queue.records('session')]).toHaveLength(0);
+    });
+
     it('that hands a failed start back to the next boot, refused as shutdown begins, is written once the database answers', async () => {
       const node = boot();
       node.engine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
@@ -483,6 +551,25 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       await node.queue.flush();
 
       expect((await rowOf()).status).toBe(SessionStatus.DISCONNECTED);
+    });
+
+    it('kept while a failed start waits to retry is settled by the hand-back of that start as shutdown begins', async () => {
+      const node = boot();
+      node.engine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
+      mockRetryPause = async () => {
+        mockRetryPause = undefined;
+        // Another start of the session meets a database that refuses its status writes; then shutdown begins.
+        refuse = patch => ('status' in patch ? unavailable() : undefined);
+        await expect(node.service.start(id, { explicit: true })).rejects.toThrow('disk I/O error');
+        refuse = undefined;
+        expect(keptOf(node, 'status')).toBeDefined();
+        node.shutdown.draining = true;
+      };
+
+      await expect(node.service.start(id, { explicit: true })).rejects.toThrow('Server is shutting down');
+
+      expect((await rowOf()).status).toBe(SessionStatus.DISCONNECTED);
+      expect([...node.queue.records('session')]).toHaveLength(0);
     });
 
     it('of a released row a failed start left claiming to run is written once the database answers', async () => {
@@ -621,6 +708,41 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       await node.queue.flush();
 
       expect(await rowOf()).toMatchObject({ phone: '628111', pushName: 'Alice' });
+    });
+
+    it('settles a status kept before it, when the engine reports READY again', async () => {
+      const node = boot();
+      await node.service.start(id, { explicit: true });
+      node.callbacks().onReady!('628111', 'Alice');
+      await settle();
+      refuse = patch => ('status' in patch ? unavailable() : undefined);
+      await expect(node.lifecycle.updateStatus(id, SessionStatus.DISCONNECTED)).rejects.toThrow('disk I/O error');
+      refuse = undefined;
+
+      node.callbacks().onReady!('628111', 'Alice');
+      await settle();
+      await node.queue.flush();
+
+      expect((await rowOf()).status).toBe(SessionStatus.READY);
+    });
+
+    it('kept is settled by the clear of an unlink that follows it', async () => {
+      const node = await keptReady();
+      await node.lifecycle.handleEngineDisconnected(id, node.engine as never, 'LOGOUT');
+      await settle();
+
+      await node.queue.flush();
+
+      expect((await rowOf()).phone).toBeNull();
+    });
+
+    it('kept is settled by the clear of a logout that follows it', async () => {
+      const node = await keptReady();
+      await node.service.logout(id);
+
+      await node.queue.flush();
+
+      expect((await rowOf()).phone).toBeNull();
     });
 
     it('is given up with its own loss action for the binding', async () => {
