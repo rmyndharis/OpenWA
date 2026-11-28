@@ -32,6 +32,7 @@ import { EventsGateway } from '../events/events.gateway';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { LoggerService } from '../../common/services/logger.service';
+import { waitUntil } from '../../../test/helpers/wait-until';
 import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
 const CHAT = '628111@c.us';
@@ -215,12 +216,14 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
     lost()
       .mock.calls.map(([, , meta]) => meta as { action?: string } | undefined)
       .filter(meta => meta?.action === 'message_change_lost');
-  const keptFor = (id: string): boolean =>
-    (LoggerService.prototype.warn as jest.Mock).mock.calls.some(
+  /** How many times a change of the message was kept: each one is kept, with its age taken, as this is logged. */
+  const keptTimes = (id: string): number =>
+    (LoggerService.prototype.warn as jest.Mock).mock.calls.filter(
       ([, meta]) =>
         (meta as { action?: string; messageId?: string } | undefined)?.action === 'message_change_parked' &&
         (meta as { messageId?: string }).messageId === id,
-    );
+    ).length;
+  const keptFor = (id: string): boolean => keptTimes(id) > 0;
   const heldOnThisNode = (id: string): boolean =>
     delivery.isMessageHeld(`msg_${sessionId}_${id}_${webhookId}`, webhookId);
   const storeRow = async (id: string, chatId = CHAT, fromMe = false): Promise<void> => {
@@ -589,7 +592,8 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
         outage = 'on';
         changes['an engine revoke']('A-1');
         changes['an edit']('A-2');
-        await settle();
+        // Both kept before the clock moves, however long that takes on this runner.
+        await waitUntil(() => keptTimes('A-1') === 1 && keptTimes('A-2') === 1);
         jest.setSystemTime(Date.now() + PARKED_CHANGE_MAX_AGE_MS + 1);
         await recover();
 
@@ -622,9 +626,9 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
         await later(PARKED_CHANGE_MAX_AGE_MS + 1, async () => {
           outage = 'on';
           changes['an edit']('A-3');
-          await settle();
+          await waitUntil(() => keptTimes('A-3') === 1);
           changes['an engine revoke']('A-3');
-          await settle();
+          await waitUntil(() => keptTimes('A-3') === 2);
         });
 
         expect(await rowOf('A-3')).toMatchObject({ type: 'revoked', body: '' });
@@ -662,9 +666,9 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
             body: 'forged',
             fromMe: false,
           } as never);
-          await settle();
+          await waitUntil(() => keptTimes('A-4') === 1);
           changes['an engine revoke']('A-4');
-          await settle();
+          await waitUntil(() => keptTimes('A-4') === 2);
         });
 
         expect(await rowOf('A-4')).toMatchObject({ type: 'revoked', body: '' });
