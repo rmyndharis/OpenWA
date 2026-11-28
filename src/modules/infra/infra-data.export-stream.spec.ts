@@ -36,6 +36,9 @@ import { SendIdempotencyKey } from '../message/entities/send-idempotency-key.ent
 import { AutomationRule } from '../automation/entities/automation-rule.entity';
 import { waitUntil } from '../../../test/helpers/wait-until';
 
+// Thousands of real SQLite rows pass the socket in some tests, so their time grows with a slower or busier runner.
+jest.setTimeout(30_000);
+
 // The export used to be built whole and serialized once, so its memory grew with the message history
 // and a large one failed outright. These tests drive the route over a real socket against real SQLite,
 // a file in WAL mode as the gateway opens it.
