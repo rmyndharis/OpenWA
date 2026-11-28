@@ -493,7 +493,7 @@ describe('WebhookOutboxService copies of deliveries with no outbox row written',
     await expect(service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).resolves.toBeNull();
   });
 
-  it('drop a copy with no content past 16 MiB of them, oldest first, each a logged loss', async () => {
+  it('drop a copy with no content past 16 MiB of them to a mark, oldest first, each a logged loss', async () => {
     // What names each message is 1 MiB here, so a copy that let its content go still holds about that much.
     service.holdUnwritten(Array.from({ length: 90 }, (_, i) => row(i, { chatId: `${'x'.repeat(MiB)}${i}` })));
 
@@ -503,9 +503,17 @@ describe('WebhookOutboxService copies of deliveries with no outbox row written',
     const dropped = reasons.filter(([reason]) => reason === 'dropped').length;
     expect(shed - dropped).toBeLessThanOrEqual(16);
     expect(shed - dropped).toBeGreaterThanOrEqual(15);
-    // Nothing of a dropped copy is kept: a revoke no longer reaches it, and its delivery reads its row (none here).
+    // A dropped copy keeps only a mark of its message: its delivery is stopped with its own data for the failure row,
+    // and with none once a revoke came after.
+    await expect(service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).resolves.toBe('lost');
+    expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeUndefined();
     await service.changeUnwrittenForMessage('s', '0', { kind: 'close' });
-    await expect(service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).resolves.toBeUndefined();
+    await expect(service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).resolves.toBe('lost');
+    expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeNull();
+    // The mark holds no bytes of the bound: the copies that let their content go still fill it.
+    service.holdUnwritten([row(200, { chatId: `${'x'.repeat(MiB)}200` })]);
+    const after = losses(warn).map(({ reason, idempotencyKey }) => [reason, idempotencyKey]);
+    expect(after.filter(([reason]) => reason === 'dropped')).toHaveLength(dropped + 1);
     // The newest copy that let its content go is still reached.
     const newestShed = reasons.filter(([reason]) => reason === 'bytes').at(-1)![1]!;
     await service.changeUnwrittenForMessage('s', newestShed.split('_')[2], { kind: 'close' });
@@ -731,6 +739,29 @@ describe('WebhookOutboxService copies of queued deliveries, across a restart', (
     expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeNull();
   });
 
+  it('restores a copy a bound dropped as a mark, which a revoke after it keeps off the failure row', async () => {
+    queued(row(0));
+    // Newer copies whose identity alone is 1 MiB: past the content bound, then past the bound of copies with none.
+    queued(...Array.from({ length: 90 }, (_, i) => row(i + 1, { chatId: `${'x'.repeat(MiB)}${i}` })));
+    expect(await service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).toBe('lost');
+
+    restart();
+
+    expect(await service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).toBe('lost');
+    expect(service.queuedCopies()[0]).toEqual({
+      webhookId: 'w',
+      idempotencyKey: 'msg_s_0_w',
+      deliveryId: 'd0',
+      lost: 'kept',
+    });
+    await service.changeUnwrittenForMessage('s', '0', { kind: 'close' });
+
+    restart();
+
+    expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeNull();
+    expect(service.queuedCopies()[0]).toMatchObject({ deliveryId: 'd0', lost: 'taken' });
+  });
+
   it('finds the jobs of the copies it restored by their message, a withdrawn one included', async () => {
     queued(row(0), row(1));
     await service.changeUnwrittenForMessage('s', '0', { kind: 'close' });
@@ -806,6 +837,56 @@ describe('WebhookOutboxService copies of queued deliveries, by message', () => {
     expect(service.queuedCopies()).toEqual([
       expect.objectContaining({ deliveryId: 'd0', change: expect.objectContaining({ body: '' }) as unknown }),
     ]);
+  });
+
+  describe('once a bound dropped the copy', () => {
+    // Newer copies whose identity alone is 1 MiB: past the content bound, then past the bound of copies with none.
+    const pressure = (): void =>
+      service.holdUnwritten(
+        Array.from({ length: 90 }, (_, i) => ({
+          ...row(i + 10),
+          idempotencyKey: `msg_other_${i}_w`,
+          payload: { id: `P-${i}`, author: `${'a'.repeat(1024 * 1024)}${i}` },
+        })),
+      );
+
+    it('tells the job it was dropped, then that a change of its message came after; an edit event takes no edit', async () => {
+      service.holdUnwritten([row(0), row(1, 'message.edited')]);
+      service.queuedUnwritten('w', 'msg_s_0_w', 'd0');
+      service.queuedUnwritten('w', 'edit_s_1_w', 'd1');
+      pressure();
+
+      expect(changed.mock.calls).toEqual([
+        ['d0', null, 'kept'],
+        ['d1', null, 'kept'],
+      ]);
+      await service.changeUnwrittenForMessage('s', 'M', { kind: 'rewrite', body: 'edited' });
+      await service.changeUnwrittenForMessage('s', 'other', { kind: 'close' });
+      expect(changed.mock.calls.slice(2)).toEqual([['d0', null, 'taken']]);
+      await service.changeUnwrittenForMessage('s', 'M', { kind: 'close' });
+      expect(changed.mock.calls.slice(3)).toEqual([['d1', null, 'taken']]);
+    });
+
+    it('tells a job queued after the drop that it was dropped', () => {
+      service.holdUnwritten([row(0)]);
+      pressure();
+
+      service.queuedUnwritten('w', 'msg_s_0_w', 'd0');
+
+      expect(changed).toHaveBeenCalledWith('d0', null, 'kept');
+    });
+
+    it('lets the mark go with its delivery, unless a queued job still reads it', () => {
+      service.holdUnwritten([row(0), row(2)]);
+      service.queuedUnwritten('w', 'msg_s_2_w', 'd2');
+      pressure();
+
+      service.forgetUnqueued('w', 'msg_s_0_w');
+      service.forgetUnqueued('w', 'msg_s_2_w');
+
+      expect(service.hasUnwritten('w', 'msg_s_0_w')).toBe(false);
+      expect(service.hasUnwritten('w', 'msg_s_2_w')).toBe(true);
+    });
   });
 
   it('tells the change a later change makes, and what a held message holds', async () => {

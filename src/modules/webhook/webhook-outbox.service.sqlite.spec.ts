@@ -472,13 +472,13 @@ describe('WebhookOutboxService.currentMessagePayload() (SQLite)', () => {
     await open('message.received', message);
 
     const held = await outbox.currentMessagePayload('w1', 'msg_s1_M_w1', 'message.received');
-    expect(dataHash(held!)).toBe(dataHash(message));
+    expect(dataHash(held as Record<string, unknown>)).toBe(dataHash(message));
 
     await outbox.rewritePendingForMessage('s1', 'M', 'edited text');
     await outbox.markQueued('w1', 'msg_s1_M_w1', 'd2');
     const rewritten = await outbox.currentMessagePayload('w1', 'msg_s1_M_w1', 'message.received');
     expect(rewritten).toMatchObject({ body: 'edited text', edited: true });
-    expect(dataHash(rewritten!)).not.toBe(dataHash(message));
+    expect(dataHash(rewritten as Record<string, unknown>)).not.toBe(dataHash(message));
   });
 
   it('answers null once the row is closed, and nothing for another event or a row of another event', async () => {

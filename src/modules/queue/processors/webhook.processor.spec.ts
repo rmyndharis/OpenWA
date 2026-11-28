@@ -16,6 +16,7 @@ import { WebhookJobData } from '../../webhook/webhook.service';
 import { getWebhookDeliveryFailuresTotal } from '../../../common/metrics/webhook-delivery-metrics';
 import { fetch as undiciFetch } from 'undici';
 import { createHmac } from 'crypto';
+import { LoggerService } from '../../../common/services/logger.service';
 
 // Delivery goes through undici's fetch (via the SSRF-pinning helper), so mock that, not global fetch.
 jest.mock('undici', () => {
@@ -1431,6 +1432,124 @@ describe('WebhookProcessor', () => {
       await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
 
       expect(outbox.close).not.toHaveBeenCalled();
+    });
+
+    // Queued where its outbox row could not be written, its copy then dropped by the bound of the copies with no content.
+    describe('of a job queued with no outbox row whose kept copy a bound dropped', () => {
+      let kept: WebhookOutboxService;
+      const queued = (): Job<WebhookJobData> => {
+        const job = makeJob({ baseHash: dataHash(queuedData), replayData: queuedData, unwritten: queuedData });
+        job.data.payload = { ...job.data.payload, data: { ...queuedData } };
+        (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = jest.fn().mockResolvedValue(undefined);
+        return job;
+      };
+      /** The copy is kept and queued as job `d`, then newer copies whose identity alone is 1 MiB push it out. */
+      const dropCopy = (): void => {
+        kept.holdUnwritten([
+          {
+            webhookId: 'wh-1',
+            sessionId: 'sess-1',
+            event: 'message.received',
+            idempotencyKey: 'k',
+            deliveryId: 'd',
+            payload: { ...queuedData },
+          },
+        ]);
+        kept.queuedUnwritten('wh-1', 'k', 'd');
+        kept.holdUnwritten(
+          Array.from({ length: 90 }, (_, i) => ({
+            webhookId: 'other',
+            sessionId: 'other',
+            event: 'message.received',
+            idempotencyKey: `msg_other_P-${i}_other`,
+            deliveryId: `p${i}`,
+            payload: { id: `P-${i}`, author: `${'a'.repeat(1024 * 1024)}${i}` },
+          })),
+        );
+      };
+      const recorded = (): Record<string, unknown> =>
+        (failureRepo.insert.mock.calls as Array<[Record<string, unknown>]>)[0]?.[0];
+
+      beforeEach(() => {
+        jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+        jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+        mockFetch.mockResolvedValue({ ok: true, status: 200 });
+        configService.get.mockImplementation((key: string, def?: unknown) =>
+          key === 'webhook.failurePayloadRetentionHours' ? 24 : def,
+        );
+        kept = new WebhookOutboxService({ findOne: () => Promise.resolve(null) } as never);
+        processor = new WebhookProcessor(
+          repo as unknown as Repository<Webhook>,
+          failureRepo as unknown as Repository<WebhookDeliveryFailure>,
+          hookManager as unknown as HookManager,
+          configService as unknown as ConfigService,
+          kept,
+        );
+      });
+
+      it.each([
+        ['no change came', (): Promise<void> => Promise.resolve(), queuedData],
+        [
+          'a revoke came after',
+          (): Promise<void> => kept.changeUnwrittenForMessage('sess-1', 'M-1', { kind: 'close' }),
+          undefined,
+        ],
+      ] as const)('sends nothing and records it as failed when %s', async (_label, change, payload) => {
+        dropCopy();
+        await change();
+
+        const result = await processor.process(queued());
+
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(result.success).toBe(false);
+        expect(recorded()).toMatchObject({ webhookId: 'wh-1', idempotencyKey: 'k', deliveryId: 'd', attempts: 1 });
+        if (payload) expect(recorded()).toMatchObject({ payload });
+        else expect(recorded()).not.toHaveProperty('payload');
+        expect(kept.hasUnwritten('wh-1', 'k')).toBe(false);
+      });
+
+      it('keeps none of its data on the failure row while payload retention is off here', async () => {
+        // Queued by a node with retention on, so the job carries its data.
+        configService.get.mockImplementation((key: string, def?: unknown) =>
+          key === 'webhook.failurePayloadRetentionHours' ? 0 : def,
+        );
+        dropCopy();
+
+        await processor.process(queued());
+
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(recorded()).toMatchObject({ webhookId: 'wh-1', idempotencyKey: 'k' });
+        expect(recorded()).not.toHaveProperty('payload');
+      });
+
+      it('waits without spending an attempt while the failure cannot be recorded', async () => {
+        dropCopy();
+        failureRepo.count.mockRejectedValueOnce(new Error('SQLITE_IOERR: disk I/O error'));
+        const job = queued();
+
+        await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(kept.hasUnwritten('wh-1', 'k')).toBe(true);
+      });
+
+      it.each([
+        ['with its data', 'kept', queuedData],
+        ['with none of it once a change of its message came after', 'taken', undefined],
+      ] as const)(
+        'sends nothing and records it as failed %s, run where the node that queued it wrote the copy dropped',
+        async (_label, lost, payload) => {
+          const job = queued();
+          Object.assign(job.data, { unwrittenLost: lost });
+
+          const result = await processor.process(job);
+
+          expect(mockFetch).not.toHaveBeenCalled();
+          expect(result.success).toBe(false);
+          if (payload) expect(recorded()).toMatchObject({ payload });
+          else expect(recorded()).not.toHaveProperty('payload');
+        },
+      );
     });
 
     describe('the copy a terminal failure keeps for a redrive', () => {

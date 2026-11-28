@@ -109,9 +109,15 @@ const UNWRITTEN_COPIES_MAX = 10_000;
 const UNWRITTEN_COPIES_MAX_BYTES = RECOVERY_MAX_BYTES;
 /**
  * The bytes the copies that let their content go, with no change landed on them, may hold: about 35,000 to 70,000 of
- * typical messages. Past it the oldest is dropped, and a change of its message no longer reaches its delivery.
+ * typical messages. Past it the oldest is dropped: a message's or an edit event's to a mark of its message (see
+ * UnwrittenCopy.lost), as a change of the message can no longer reach its content, so its delivery is stopped and
+ * recorded as failed rather than sent; another event's entirely, its delivery sending what it holds.
  */
 const UNWRITTEN_SHED_MAX_BYTES = 16 * 1024 * 1024;
+/** Why a delivery whose copy a bound dropped (see UnwrittenCopy.lost) was stopped, as its failure row records it. */
+export const LOST_COPY_ERROR =
+  'Not sent: its kept copy was dropped while the database could not answer, so a change of its message could not reach it';
+
 /** The fields of a delivery's data that name its message: all a copy keeps once its content is let go. */
 const MESSAGE_IDENTITY_FIELDS = ['id', 'messageId', 'chatId', 'fromMe', 'author', 'sender'];
 
@@ -134,6 +140,12 @@ interface UnwrittenCopy {
   queued?: string;
   /** The message it carries, kept from the start: a withdrawn copy names none any more. */
   messageId?: string;
+  /**
+   * Set once the bound of the copies with no content dropped the copy of a message or an edit event (`data` is then
+   * null): its delivery is stopped and recorded as failed, never sent with content no change can reach. `taken` once a
+   * change of its message came after: the failure row keeps none of the delivery's data.
+   */
+  lost?: 'kept' | 'taken';
 }
 
 /** What the journal keeps of a copy of a queued delivery. */
@@ -146,6 +158,7 @@ interface JournaledCopy {
   c?: 'redact' | 'rewrite';
   q: string;
   m?: string;
+  l?: 'kept' | 'taken';
 }
 
 /** The message a delivery's data carries: an edit event names it in `messageId`, a message delivery in `id`. */
@@ -153,6 +166,13 @@ const messageIdOf = (event: string, data: Record<string, unknown> | null | undef
   const id = MESSAGE_CHANGE_EVENTS.includes(event) ? data?.messageId : data?.id;
   return typeof id === 'string' && id ? id : undefined;
 };
+
+/** Told what a copy kept for a queued delivery holds after a change, or that a bound dropped it (see UnwrittenCopy.lost). */
+export type QueuedCopyListener = (
+  deliveryId: string,
+  data: Record<string, unknown> | null,
+  lost?: 'kept' | 'taken',
+) => void;
 
 const splitUnwrittenKey = (key: string): [string, string] => {
   const at = key.indexOf('\u0000');
@@ -268,6 +288,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       ...(v.c === 'redact' || v.c === 'rewrite' ? { changed: v.c } : {}),
       queued: v.q,
       messageId: typeof v.m === 'string' ? v.m : messageIdOf(v.e, v.d),
+      ...(v.l === 'kept' || v.l === 'taken' ? { lost: v.l } : {}),
     };
     copy.bytes = copyBytes(key, copy);
     this.unwritten.set(key, copy);
@@ -293,8 +314,8 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   private journalEntry(copy: UnwrittenCopy): JournaledCopy {
-    const { sessionId: s, event: e, data: d, engineRef: r, shed: h, changed: c, queued, messageId: m } = copy;
-    return { s, e, d, r, h, c, q: queued!, m };
+    const { sessionId: s, event: e, data: d, engineRef: r, shed: h, changed: c, queued, messageId: m, lost: l } = copy;
+    return { s, e, d, r, h, c, q: queued!, m, l };
   }
 
   /** Keep what a copy of a queued delivery holds now in the journal. */
@@ -802,11 +823,20 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * The copy a delivery whose outbox row could not be written holds now: null once withdrawn, undefined when none is
-   * kept for it or its content was let go (the delivery sends what it holds).
+   * kept for it or its content was let go (the delivery sends what it holds). A copy a bound dropped answers as one
+   * whose content was let go, and null once a change of its message came after.
    */
   unwrittenCopy(webhookId: string, idempotencyKey: string): Record<string, unknown> | null | undefined {
     const copy = this.unwritten.get(`${webhookId}\u0000${idempotencyKey}`);
+    if (copy?.lost) return copy.lost === 'taken' ? null : undefined;
     return copy?.shed && copy.data ? undefined : copy?.data;
+  }
+
+  /** Let a copy go once its delivery ended on this node, unless a queued job still reads it. */
+  forgetUnqueued(webhookId: string, idempotencyKey: string): void {
+    if (this.unwritten.get(`${webhookId}\u0000${idempotencyKey}`)?.queued === undefined) {
+      this.forgetUnwritten(webhookId, idempotencyKey);
+    }
   }
 
   forgetUnwritten(webhookId: string, idempotencyKey: string): void {
@@ -821,10 +851,13 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   // Told of each change a copy of a queued delivery takes (see onQueuedCopyChanged).
-  private queuedCopyChanged?: (deliveryId: string, data: Record<string, unknown> | null) => void;
+  private queuedCopyChanged?: QueuedCopyListener;
 
-  /** Be told when a change of its message reaches a copy kept for a queued delivery: withdrawn (null), or its new data. */
-  onQueuedCopyChanged(listener: (deliveryId: string, data: Record<string, unknown> | null) => void): void {
+  /**
+   * Be told when a change of its message reaches a copy kept for a queued delivery: withdrawn (null), or its new data;
+   * and when a bound drops it (`lost`, see UnwrittenCopy.lost).
+   */
+  onQueuedCopyChanged(listener: QueuedCopyListener): void {
     this.queuedCopyChanged = listener;
   }
 
@@ -858,7 +891,8 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     copy.queued = deliveryId;
     this.indexQueued(copy, true);
     this.journalCopy(key, copy);
-    if (copy.data === null || copy.changed) this.queuedCopyChanged?.(deliveryId, copy.data);
+    if (copy.lost) this.queuedCopyChanged?.(deliveryId, null, copy.lost);
+    else if (copy.data === null || copy.changed) this.queuedCopyChanged?.(deliveryId, copy.data);
     return { sessionId: copy.sessionId, messageId: copy.messageId };
   }
 
@@ -871,13 +905,16 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     idempotencyKey: string;
     deliveryId: string;
     change?: Record<string, unknown> | null;
+    lost?: 'kept' | 'taken';
   }> {
     return [...this.unwritten]
       .filter(([, copy]) => copy.queued !== undefined)
       .map(([key, copy]) => {
         const [webhookId, idempotencyKey] = splitUnwrittenKey(key);
+        const deliveryId = copy.queued!;
+        if (copy.lost) return { webhookId, idempotencyKey, deliveryId, lost: copy.lost };
         const changed = copy.data === null || copy.changed !== undefined;
-        return { webhookId, idempotencyKey, deliveryId: copy.queued!, ...(changed ? { change: copy.data } : {}) };
+        return { webhookId, idempotencyKey, deliveryId, ...(changed ? { change: copy.data } : {}) };
       });
   }
 
@@ -953,7 +990,16 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     for (const key of this.unwrittenShed) {
       if (this.shedBytes <= UNWRITTEN_SHED_MAX_BYTES) break;
       const copy = this.unwritten.get(key)!;
-      this.forgetUnwritten(...splitUnwrittenKey(key));
+      // No change of a message reaches the copy of another event: nothing guards it, and it goes as it always did.
+      if (!MESSAGE_DELIVERY_EVENTS.includes(copy.event) && !MESSAGE_CHANGE_EVENTS.includes(copy.event)) {
+        this.forgetUnwritten(...splitUnwrittenKey(key));
+        this.logLostCopy(key, copy, 'dropped', 'Nothing of it is kept; its delivery sends what it holds');
+        continue;
+      }
+      copy.lost = 'kept';
+      copy.engineRef = null;
+      this.setUnwrittenData(key, copy, null);
+      if (copy.queued !== undefined) this.queuedCopyChanged?.(copy.queued, null, 'kept');
       this.logLostCopy(key, copy, 'dropped');
     }
   }
@@ -971,7 +1017,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       {
         count: shed,
         bytes: shed,
-        dropped: 'Nothing of it is kept: a change of its message no longer reaches it',
+        dropped: 'Only what names its message is kept: its delivery is stopped and recorded as failed, not sent',
         rewrite: 'The edit is not applied: its content was let go',
       }[reason];
     this.logger.error(`A kept copy of a delivery with no outbox row lost what it held. ${lost}`, undefined, {
@@ -997,6 +1043,15 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     passes?: MessageCopyFilter,
   ): Promise<void> {
     for (const [key, copy] of this.unwritten) {
+      if (copy.lost === 'kept' && copy.sessionId === sessionId && copy.messageId === waMessageId) {
+        // Its content is gone, so the change cannot be judged on it: whatever names the message keeps the delivery's
+        // data off its failure row, as withholding is the safe side.
+        if (MESSAGE_CHANGE_EVENTS.includes(copy.event) && change.kind === 'rewrite') continue;
+        copy.lost = 'taken';
+        this.journalCopy(key, copy);
+        if (copy.queued !== undefined) this.queuedCopyChanged?.(copy.queued, null, 'taken');
+        continue;
+      }
       if (copy.sessionId !== sessionId || !copy.data) continue;
       const edit = MESSAGE_CHANGE_EVENTS.includes(copy.event) && copy.data.messageId === waMessageId;
       const message = MESSAGE_DELIVERY_EVENTS.includes(copy.event) && copy.data.id === waMessageId;
@@ -1026,17 +1081,21 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
    * The event data the outbox row of a message delivery holds now: null once the row was closed (dispatched or failed:
    * the message was taken back, or the delivery settled elsewhere), undefined when the row says nothing either way
    * (another event's delivery, a row of another event under the same key, no row, a legacy row without a state, an
-   * open row without a payload, or a payload that does not parse). Throws when the database cannot be read: a caller
-   * that cannot tell whether the message was taken back must not send it on a guess.
+   * open row without a payload, or a payload that does not parse), and 'lost' for a delivery whose kept copy a bound
+   * dropped (see UnwrittenCopy.lost), which is not sent. Throws when the database cannot be read: a caller that cannot
+   * tell whether the message was taken back must not send it on a guess.
    */
   async currentMessagePayload(
     webhookId: string,
     idempotencyKey: string,
     event: string,
-  ): Promise<Record<string, unknown> | null | undefined> {
+  ): Promise<Record<string, unknown> | null | undefined | 'lost'> {
     // A delivery whose row could not be written: its copy, as the changes of the message left it.
     const copy = this.unwritten.get(`${webhookId}\u0000${idempotencyKey}`);
-    if (copy && copy.event === event) return copy.shed && copy.data ? undefined : copy.data;
+    if (copy && copy.event === event) {
+      if (copy.lost) return 'lost';
+      return copy.shed && copy.data ? undefined : copy.data;
+    }
     // An edit event is checked against its own row as a message's delivery is: closed once the message was taken back.
     if (!MESSAGE_DELIVERY_EVENTS.includes(event) && !MESSAGE_CHANGE_EVENTS.includes(event)) return undefined;
     let row: Pick<WebhookOutboxEvent, 'event' | 'state' | 'payload'> | null;

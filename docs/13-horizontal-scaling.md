@@ -35,7 +35,8 @@
 > withdraw. The recovery journal (`RECOVERY_JOURNAL_PATH`) belongs to one process: never share the file.
 > A delivery queued while its outbox row could not be written has its copy only in the memory of the node that
 > queued it, which writes what a worker of another node needs into the job itself: the copy as a change left it
-> (withdrawn, the placeholder of a delete through the API, or the edited text), and, while it keeps a change of
+> (withdrawn, the placeholder of a delete through the API, or the edited text, or dropped by its bound, which stops
+> the job and records it as a delivery failure), and, while it keeps a change of
 > the message the database has not taken, a hold it renews every 20 s as a 60 s lease, so a node that stopped
 > holds the job no longer than that. The lease is a key Redis expires itself, so no node's clock is read against
 > another's; a worker that cannot ask Redis for it waits, spending no attempt. With

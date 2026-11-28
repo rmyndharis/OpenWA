@@ -11,6 +11,7 @@ import { closeWorkerIfStarted } from './close-worker';
 import { WebhookJobData, WebhookPayload } from '../../webhook/webhook.service';
 import { Webhook } from '../../webhook/entities/webhook.entity';
 import {
+  LOST_COPY_ERROR,
   MESSAGE_CHANGE_EVENTS,
   WebhookOutboxService,
   editedMessagePayload,
@@ -195,17 +196,19 @@ export class WebhookProcessor extends WorkerHost {
       // A message delivery reads its outbox row too: the message may have been revoked, deleted
       // through the API or edited since the job was queued.
       let current: Webhook | null;
-      let held: Record<string, unknown> | null | undefined;
+      let held: Record<string, unknown> | null | undefined | 'lost';
       let heldElsewhere = false;
       try {
         current = await this.loadDeliverableWebhook(webhookId, event, sessionId);
         held = current ? await this.outbox.currentMessagePayload(webhookId, payload.idempotencyKey, event) : undefined;
         // Queued while its outbox row could not be written, and no copy of it here: what the node that queued it wrote
         // into the job says instead, as its own copy and hold would there (a withdrawn copy ends the job, a change it
-        // keeps holds it, and the copy as a change left it is sent), else the message's row.
+        // keeps holds it, a copy a bound dropped stops it, and the copy as a change left it is sent), else the message's
+        // row.
         if (current && held === undefined && job.data.unwritten) {
           if (job.data.unwrittenChange === null) held = null;
           else if (await this.heldByQueuingNode(payload.deliveryId)) heldElsewhere = true;
+          else if (job.data.unwrittenLost) held = 'lost';
           else if (job.data.unwrittenChange !== undefined) held = job.data.unwrittenChange;
           else held = await this.storedChange(sessionId, event, job.data.unwritten);
         }
@@ -245,13 +248,16 @@ export class WebhookProcessor extends WorkerHost {
       }
       // A change of the message kept on this node may still withdraw or rewrite this copy: the job waits for it. The
       // message is the one the server named, never what a hook made of the body.
+      const lost = held === 'lost';
+      const copy = held === 'lost' ? job.data.unwritten : held;
       const named =
-        job.data.messageId !== undefined ? { messageId: job.data.messageId } : (held ?? job.data.replayData);
+        job.data.messageId !== undefined ? { messageId: job.data.messageId } : (copy ?? job.data.replayData);
       if (this.outbox.isMessageHeld(payload.idempotencyKey, webhookId, { sessionId, event, data: named }))
         return await this.delayWithoutAttempt(job, token);
+      if (lost) return await this.stopLostCopy(ctx, current, token);
       ctx.url = current.url;
       let body = JSON.stringify(payload);
-      const changed = changedData(held, job.data.baseHash);
+      const changed = changedData(copy, job.data.baseHash);
       if (changed) {
         // Rewritten since the job was queued (an edit, or a delete through the API): built again from the row,
         // through the same hooks and checks as a dispatch, under the job's own key and delivery id.
@@ -452,6 +458,60 @@ export class WebhookProcessor extends WorkerHost {
   }
 
   /**
+   * A job whose kept copy a bound dropped, on this node or on the one that queued it, is not sent, as a change of its
+   * message can no longer reach it: it is recorded as a terminal failure, with its pre-hook data for a redrive unless a
+   * change of the message came after the drop. While that record cannot be written the job waits, spending no attempt.
+   */
+  private async stopLostCopy(
+    ctx: WebhookDeliveryContext,
+    current: Webhook,
+    token: string | undefined,
+  ): Promise<WebhookJobResult> {
+    const { job, webhookId, event, payload, sessionId } = ctx;
+    const recorded = await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
+      webhookId,
+      sessionId,
+      event,
+      url: current.url,
+      idempotencyKey: payload.idempotencyKey,
+      deliveryId: payload.deliveryId,
+      attempts: job.attemptsMade + 1,
+      lastStatusCode: null,
+      lastError: LOST_COPY_ERROR,
+      ...(this.lostCopyTaken(job) ? {} : this.failurePayload(job.data.replayData)),
+    });
+    if (recorded === null) return await this.delayWithoutAttempt(job, token);
+    if (recorded) incrementWebhookDeliveryFailures();
+    this.logger.error('Webhook delivery stopped', LOST_COPY_ERROR, {
+      webhookId,
+      event,
+      deliveryId: payload.deliveryId,
+      idempotencyKey: payload.idempotencyKey,
+      action: 'webhook_failed',
+    });
+    await this.hookManager.execute(
+      'webhook:error',
+      {
+        sessionId,
+        event,
+        webhookId,
+        deliveryId: payload.deliveryId,
+        error: LOST_COPY_ERROR,
+        attempt: job.attemptsMade + 1,
+      },
+      { sessionId, source: 'WebhookProcessor' },
+    );
+    await this.outbox.close(webhookId, payload.idempotencyKey, 'dispatched');
+    return { statusCode: 0, success: false, error: LOST_COPY_ERROR, responseTime: 0 };
+  }
+
+  /** A change of the message came after the bound dropped the job's copy: its failure row keeps none of its data. */
+  private lostCopyTaken(job: Job<WebhookJobData>): boolean {
+    const { webhookId, payload, unwrittenLost } = job.data;
+    return unwrittenLost === 'taken' || this.outbox.unwrittenCopy(webhookId, payload.idempotencyKey) === null;
+  }
+
+  /**
    * Whether the node that queued a job keeps a change of its message: its lease, a key Redis expires itself, so no
    * node's clock is read. Throws when Redis cannot answer: the job waits rather than send on a guess.
    */
@@ -517,6 +577,7 @@ export class WebhookProcessor extends WorkerHost {
     const held = await this.outbox
       .currentMessagePayload(webhookId, payload.idempotencyKey, event)
       .catch(() => undefined);
+    if (held === 'lost') return this.lostCopyTaken(job) ? undefined : replayData;
     const changed = changedData(held, baseHash);
     return changed === undefined ? replayData : (changed ?? undefined);
   }

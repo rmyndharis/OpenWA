@@ -9,6 +9,7 @@ import { setTimeout } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { Webhook } from './entities/webhook.entity';
 import {
+  LOST_COPY_ERROR,
   MESSAGE_CHANGE_EVENTS,
   MESSAGE_DELIVERY_EVENTS,
   WebhookOutboxService,
@@ -100,6 +101,11 @@ export interface WebhookJobData {
   unwritten?: Record<string, unknown>;
   /** Written by the node that queued it: its copy as a change of the message left it (null once withdrawn). */
   unwrittenChange?: Record<string, unknown> | null;
+  /**
+   * Written by the node that queued it once a bound dropped its copy: the job is not sent but recorded as failed, with
+   * none of its data once a change of the message came after (`taken`).
+   */
+  unwrittenLost?: 'kept' | 'taken';
 }
 
 /**
@@ -211,6 +217,8 @@ interface DispatchEventContext {
    * every change, so the row is not consulted.
    */
   fromKeptCopy?: boolean;
+  /** The copy kept for it was dropped by a bound while it waited for a slot: it is stopped (see lostCopyFailure). */
+  copyLost?: boolean;
   /**
    * Ends a replay's retry backoff early and gives no further attempt. A replay holds no dispatch
    * slot, so the shutdown drain's limiter close cannot stop it; its owner aborts this instead.
@@ -231,6 +239,8 @@ interface DirectDeliveryOptions {
   replayData?: Record<string, unknown>;
   singleAttempt?: boolean;
   signal?: AbortSignal;
+  /** See DispatchEventContext.copyLost. */
+  copyLost?: boolean;
 }
 
 class UnrecordedWebhookFailure extends Error {}
@@ -396,7 +406,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     });
     // A worker of another node reads what this node knows of a job it queued with no outbox row from the job itself.
     if (this.queueEnabled && this.webhookQueue) {
-      outbox.onQueuedCopyChanged((deliveryId, data) => this.markJob(deliveryId, { change: data }));
+      outbox.onQueuedCopyChanged((deliveryId, data, lost) =>
+        this.markJob(deliveryId, lost ? { lost } : { change: data }),
+      );
     }
     // A session's state as a dead process saw it would go out as current after a restart: those events stay in memory.
     this.recovery.register('dispatch', {
@@ -465,8 +477,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     if (this.queueEnabled && this.webhookQueue) {
       // What a change left of a restored copy is written into its job again: a mark Redis had not taken before the
       // stop is not lost. A kept change restored holds its jobs again when the projector restores it.
-      for (const { deliveryId, change } of this.outbox.queuedCopies()) {
-        if (change !== undefined) this.markJob(deliveryId, { change });
+      for (const { deliveryId, change, lost } of this.outbox.queuedCopies()) {
+        if (lost) this.markJob(deliveryId, { lost });
+        else if (change !== undefined) this.markJob(deliveryId, { change });
       }
       this.orphanCheck = setInterval(() => void this.dropOrphanCopies(), ORPHAN_COPY_CHECK_MS);
       this.orphanCheck.unref?.();
@@ -486,6 +499,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       edit: boolean;
       message?: string;
       change?: Record<string, unknown> | null;
+      lost?: 'kept' | 'taken';
       changeOwed: boolean;
       releaseOwed: boolean;
     }
@@ -498,7 +512,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   /** Note what a job this node queued must say: the copy's state after a change, or whether a change of it is kept. */
   private markJob(
     deliveryId: string,
-    mark: { change?: Record<string, unknown> | null; held?: boolean; edit?: boolean; message?: string },
+    mark: {
+      change?: Record<string, unknown> | null;
+      lost?: 'kept' | 'taken';
+      held?: boolean;
+      edit?: boolean;
+      message?: string;
+    },
   ): void {
     const entry = this.jobMarks.get(deliveryId) ?? { held: false, edit: false, changeOwed: false, releaseOwed: false };
     if (mark.held !== undefined) {
@@ -509,6 +529,10 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     if (mark.message !== undefined) entry.message = mark.message;
     if ('change' in mark) {
       entry.change = mark.change;
+      entry.changeOwed = true;
+    }
+    if (mark.lost) {
+      entry.lost = mark.lost;
       entry.changeOwed = true;
     }
     this.jobMarks.set(deliveryId, entry);
@@ -551,7 +575,11 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
               continue;
             }
             if (entry.changeOwed) {
-              await job.updateData({ ...job.data, unwrittenChange: entry.change });
+              await job.updateData({
+                ...job.data,
+                ...('change' in entry ? { unwrittenChange: entry.change } : {}),
+                ...(entry.lost ? { unwrittenLost: entry.lost } : {}),
+              });
               entry.changeOwed = false;
             }
             if (entry.held) await redis.set(lease, '1', { PX: JOB_HOLD_LEASE_MS });
@@ -1051,7 +1079,11 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         } finally {
           const left = (this.locallyPending.get(idempotencyKey) ?? 1) - 1;
           if (left > 0) this.locallyPending.set(idempotencyKey, left);
-          else this.locallyPending.delete(idempotencyKey);
+          else {
+            this.locallyPending.delete(idempotencyKey);
+            // Every way a direct delivery ends lands here: nothing reads its copy after it, a queued job's aside.
+            this.outbox.forgetUnqueued(webhook.id, idempotencyKey);
+          }
         }
       }),
     );
@@ -1300,6 +1332,8 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     });
     // Written through the repository's manager so a failure throws, and the event stays kept.
     if ((await this.openPrepared(prepared, this.webhookRepository.manager)) === null) {
+      // The event stays kept, and no delivery runs for the copies this attempt held.
+      for (const item of prepared) this.outbox.forgetUnwritten(item.webhook.id, item.idempotencyKey);
       throw new Error('The outbox rows of a kept webhook event could not be written');
     }
     void this.dispatchPrepared(prepared);
@@ -1915,7 +1949,10 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
                   this.outbox.forgetUnwritten(webhook.id, idempotencyKey);
                   return;
                 }
-                if (changed && changed !== 'unread') occurrence = { ...ctx, baseData: changed, storedHash: undefined };
+                if (changed === 'lost') occurrence = { ...ctx, copyLost: true };
+                else if (changed && changed !== 'unread') {
+                  occurrence = { ...ctx, baseData: changed, storedHash: undefined };
+                }
               }
               const outcome = await this.deliverOne(target, deliveryId, idempotencyKey, { ...occurrence, yieldSlot });
               // Retire only after queue ownership, success, cancellation or a durable terminal row.
@@ -2111,21 +2148,24 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       replayData: this.keepsFailurePayload() ? ctx.baseData : undefined,
       singleAttempt: ctx.singleAttempt || ctx.oneDirectAttempt,
       signal: ctx.signal,
+      copyLost: ctx.copyLost,
     };
   }
 
   /**
    * What a message delivery takes from its outbox row before it is sent again (see changedData): null once the message
    * was taken back, the data a change rewrote the row with, else undefined. 'unread' for a row that cannot be read: the
-   * delivery goes on with what it holds, unless a change of the message is held on this node (isMessageHeld).
+   * delivery goes on with what it holds, unless a change of the message is held on this node (isMessageHeld). 'lost'
+   * once a bound dropped the copy kept for it: it is stopped (see lostCopyFailure).
    */
   private async messageChange(
     webhookId: string,
     idempotencyKey: string,
     held: Pick<DispatchEventContext, 'sessionId' | 'event' | 'baseData' | 'storedHash'>,
-  ): Promise<Record<string, unknown> | null | undefined | 'unread'> {
+  ): Promise<Record<string, unknown> | null | undefined | 'unread' | 'lost'> {
     try {
       const row = await this.outbox.currentMessagePayload(webhookId, idempotencyKey, held.event);
+      if (row === 'lost') return row;
       return changedData(row, held.storedHash === undefined ? dataHash(held.baseData) : held.storedHash);
     } catch (error) {
       if (this.isMessageHeld(idempotencyKey, webhookId, { ...held, data: held.baseData })) return 'unread';
@@ -2174,6 +2214,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     let current = webhook;
     let { baseData, storedHash, replayData } = options;
     for (let attempt = 1; ; attempt++) {
+      if (attempt === 1 && options.copyLost) throw await this.lostCopyFailure(current, payload, attempt, replayData);
       if (attempt > 1 && baseData) {
         // The message may have been revoked, deleted through the API or edited during the backoff.
         const changed = await this.messageChange(webhook.id, payload.idempotencyKey, {
@@ -2199,6 +2240,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           attempt--;
           continue;
         }
+        if (changed === 'lost') throw await this.lostCopyFailure(current, payload, attempt, replayData);
         if (changed && changed !== 'unread') {
           const rebuilt = await this.preflight.preflightDelivery(current, payload.deliveryId, payload.idempotencyKey, {
             sessionId: payload.sessionId,
@@ -2305,7 +2347,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
             baseData,
             storedHash,
           });
-          if (changed !== undefined && changed !== 'unread') replayData = changed ?? undefined;
+          if (changed === 'lost') {
+            if (this.outbox.unwrittenCopy(webhook.id, payload.idempotencyKey) === null) replayData = undefined;
+          } else if (changed !== undefined && changed !== 'unread') replayData = changed ?? undefined;
         }
         const recorded = await recordTerminalFailure(this.failureRepository, this.logger, {
           webhookId: webhook.id,
@@ -2323,6 +2367,35 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         throw error;
       }
     }
+  }
+
+  /**
+   * A delivery whose kept copy a bound dropped is not sent, as a change of its message can no longer reach it: it is
+   * recorded as a terminal failure, with its pre-hook data for a redrive (while payload retention is on) unless a change
+   * of the message came after the drop. Answers the error that ends it: UnrecordedWebhookFailure when the record could
+   * not be written.
+   */
+  private async lostCopyFailure(
+    webhook: Webhook,
+    payload: WebhookPayload,
+    attempts: number,
+    replayData?: Record<string, unknown>,
+  ): Promise<Error> {
+    const error = new Error(LOST_COPY_ERROR);
+    const kept = replayData && this.outbox.unwrittenCopy(webhook.id, payload.idempotencyKey) !== null;
+    const recorded = await recordTerminalFailure(this.failureRepository, this.logger, {
+      webhookId: webhook.id,
+      sessionId: payload.sessionId,
+      event: payload.event,
+      url: webhook.url,
+      idempotencyKey: payload.idempotencyKey,
+      deliveryId: payload.deliveryId,
+      attempts,
+      error,
+      ...(kept ? { payload: replayData, payloadRetentionHours: this.payloadRetentionHours() } : {}),
+    });
+    if (recorded !== false) incrementWebhookDeliveryFailures();
+    return recorded === null ? new UnrecordedWebhookFailure(LOST_COPY_ERROR) : error;
   }
 
   private markFailingWebhook(webhookId: string): void {

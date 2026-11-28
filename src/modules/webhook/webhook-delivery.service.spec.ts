@@ -2140,8 +2140,12 @@ describe('WebhookDeliveryService', () => {
       const lease = ['bull:webhook:held:d', { PX: 60_000 }];
       const written = (): Array<Record<string, unknown>> =>
         job.updateData.mock.calls.map(([data]) => data as Record<string, unknown>);
-      const listener = (): ((id: string, data: unknown) => void) =>
-        (outboxService.onQueuedCopyChanged.mock.calls as Array<[(id: string, data: unknown) => void]>)[0][0];
+      const listener = (): ((id: string, data: unknown, lost?: 'kept' | 'taken') => void) =>
+        (
+          outboxService.onQueuedCopyChanged.mock.calls as Array<
+            [(id: string, data: unknown, lost?: 'kept' | 'taken') => void]
+          >
+        )[0][0];
 
       beforeEach(() => {
         job = {
@@ -2177,6 +2181,23 @@ describe('WebhookDeliveryService', () => {
         expect(written()).toEqual([expect.objectContaining({ unwritten: { id: 'M-1' }, unwrittenChange: null })]);
         await jest.advanceTimersByTimeAsync(60_000);
         expect(job.updateData).toHaveBeenCalledTimes(1);
+        await service.onModuleDestroy();
+      });
+
+      it('writes that a bound dropped the copy, then that a change of its message came after', async () => {
+        const service = await buildQueueService(queueOn);
+        const changed = listener();
+
+        changed('d', null, 'kept');
+        await jest.advanceTimersByTimeAsync(0);
+        changed('d', null, 'taken');
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(written()).toEqual([
+          expect.objectContaining({ unwritten: { id: 'M-1' }, unwrittenLost: 'kept' }),
+          expect.objectContaining({ unwrittenLost: 'taken' }),
+        ]);
+        expect(written()[1]).not.toHaveProperty('unwrittenChange');
         await service.onModuleDestroy();
       });
 
@@ -2279,6 +2300,7 @@ describe('WebhookDeliveryService', () => {
           queuedCopies: jest.fn().mockReturnValue([
             { webhookId: 'wh-1', idempotencyKey: 'k', deliveryId: 'd', change: null },
             { webhookId: 'wh-1', idempotencyKey: 'k2', deliveryId: 'untouched' },
+            { webhookId: 'wh-1', idempotencyKey: 'k3', deliveryId: 'dropped', lost: 'kept' },
           ]),
         });
         const service = await buildQueueService(queueOn);
@@ -2286,8 +2308,12 @@ describe('WebhookDeliveryService', () => {
         service.onApplicationBootstrap();
         await jest.advanceTimersByTimeAsync(0);
 
-        // One write, for the copy a change reached; the other job is only checked against the queue.
-        expect(written()).toEqual([expect.objectContaining({ unwrittenChange: null })]);
+        // One write for the copy a change reached, one for the copy a bound dropped; the other job is only checked.
+        expect(written()).toEqual([
+          expect.objectContaining({ unwrittenChange: null }),
+          expect.objectContaining({ unwrittenLost: 'kept' }),
+        ]);
+        expect(webhookQueue.getJob).toHaveBeenCalledWith('dropped');
         await service.onModuleDestroy();
       });
 

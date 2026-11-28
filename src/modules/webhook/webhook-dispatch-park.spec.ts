@@ -922,6 +922,152 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
       });
     });
 
+    describe('whose copy the bound of copies with no content dropped', () => {
+      // Newer copies of other deliveries whose identity alone is 1 MiB: its content goes first, then the copy itself.
+      const pressure = (): void =>
+        outbox.holdUnwritten(
+          Array.from({ length: 90 }, (_, i) => ({
+            webhookId: 'other',
+            sessionId: 'other',
+            event: 'message.received',
+            idempotencyKey: `msg_other_P-${i}_other`,
+            deliveryId: `p${i}`,
+            payload: { id: `P-${i}`, author: `${'a'.repeat(1024 * 1024)}${i}` },
+          })),
+        );
+      const failures = (): Promise<WebhookDeliveryFailure[]> =>
+        ds
+          .getRepository(WebhookDeliveryFailure)
+          .createQueryBuilder('f')
+          .addSelect('f.payload')
+          .where('f.event = :event', { event: 'message.received' })
+          .getMany();
+
+      it.each([
+        [
+          'an engine revoke',
+          () => projector.recordRevoke(sessionId, 'U-1', { kind: 'revoke', chatId: CHAT, fromMe: false }, true),
+        ],
+        ['a delete through the API', () => projector.recordRevoke(sessionId, 'U-1', { kind: 'revoke', chatId: CHAT })],
+        [
+          'an edit',
+          () =>
+            projector.recordOutboundMessageEdit(sessionId, 'U-1', 'edited text', {
+              kind: 'edit',
+              chatId: CHAT,
+              fromMe: false,
+            }),
+        ],
+      ] as const)('stops it and records it as failed with none of its data once %s came after', async (_l, change) => {
+        retentionHours = 24;
+        await failedOnce(async () => {
+          pressure();
+          await change();
+        });
+
+        expect(received().map(data => data.body)).toEqual(['first text']);
+        const [row, ...more] = await failures();
+        expect(more).toEqual([]);
+        expect(row).toMatchObject({ attempts: 2 });
+        expect(row.payload).toBeFalsy();
+        expect(outbox.unwrittenCopy(webhook.id, `msg_${sessionId}_U-1_${webhook.id}`)).toBeUndefined();
+      });
+
+      it('stops it and records it as failed with its data for a redrive when no change came', async () => {
+        retentionHours = 24;
+        await failedOnce(() => Promise.resolve(pressure()));
+
+        expect(received().map(data => data.body)).toEqual(['first text']);
+        const [row, ...more] = await failures();
+        expect(more).toEqual([]);
+        expect(row.payload).toMatchObject({ id: 'U-1', body: 'first text' });
+      });
+
+      it.each([
+        ['with its data for a redrive', 24],
+        ['with none of its data while payload retention is off', 0],
+      ] as const)(
+        'stops a delivery that waited for a slot while its copy was dropped, recorded as failed %s',
+        async (_label, hours) => {
+          retentionHours = hours;
+          (delivery as unknown as { dispatchLimiter: ConcurrencyLimiter }).dispatchLimiter = new ConcurrencyLimiter(
+            1,
+            1000,
+          );
+          let release: () => void = () => undefined;
+          mockFetch.mockImplementationOnce(
+            () => new Promise(resolve => (release = () => resolve(new Response('ok', { status: 200 })))),
+          );
+          const first = webhookService.dispatch(sessionId, 'group.join', dataFor('group.join'));
+          await waitFor(() => mockFetch.mock.calls.length === 1);
+          outage = 'outbox writes';
+          const second = webhookService.dispatch(sessionId, 'message.received', msg);
+          await waitFor(
+            () => (delivery as unknown as { dispatchLimiter: ConcurrencyLimiter }).dispatchLimiter.queuedCount > 0,
+          );
+          pressure();
+
+          release();
+          await Promise.all([first, second]);
+
+          expect(received()).toEqual([]);
+          const [row, ...more] = await failures();
+          expect(more).toEqual([]);
+          expect(row).toMatchObject({ attempts: 1 });
+          if (hours) expect(row.payload).toMatchObject({ id: 'U-1', body: 'first text' });
+          else expect(row.payload).toBeFalsy();
+          expect(outbox.unwrittenCopy(webhook.id, `msg_${sessionId}_U-1_${webhook.id}`)).toBeUndefined();
+        },
+      );
+
+      it.each([
+        ['kept, and dispatched once the database answers', (): Promise<unknown> => Promise.resolve(), 2],
+        [
+          'given up once a revoke came after',
+          () => projector.recordRevoke(sessionId, 'U-1', { kind: 'revoke', chatId: CHAT, fromMe: false }, true),
+          1,
+        ],
+      ] as const)('is %s while its failure cannot be recorded', async (_label, change, sent) => {
+        await failedOnce(async () => {
+          pressure();
+          await change();
+          outage = 'writes';
+        });
+        expect(await failures()).toEqual([]);
+
+        await recover();
+
+        expect(received().map(data => data.body)).toEqual(Array.from({ length: sent }, () => 'first text'));
+      });
+
+      it.each(['group.join', 'message.ack', 'message.revoked'])(
+        'still sends a %s delivery, which no change of a message reaches',
+        async event => {
+          retryDelay = 800;
+          await ds.getRepository(Webhook).update(webhook.id, { retryCount: 2 });
+          outage = 'outbox writes';
+          mockFetch.mockResolvedValueOnce(new Response('down', { status: 500 }));
+
+          await retriedAfter(
+            () => webhookService.dispatch(sessionId, event, dataFor(event)),
+            () => Promise.resolve(pressure()),
+          );
+
+          expect(posted().map(post => post.event)).toEqual([event, event]);
+          expect(await ds.getRepository(WebhookDeliveryFailure).count({ where: { event } })).toBe(0);
+        },
+      );
+
+      it('keeps no data on the failure row while payload retention is off', async () => {
+        await failedOnce(() => Promise.resolve(pressure()));
+
+        expect(received().map(data => data.body)).toEqual(['first text']);
+        const [row] = await failures();
+        expect(row).toBeDefined();
+        expect(row.payload).toBeFalsy();
+      });
+    });
+
     it('sends nothing of an edit its webhook filters exclude', async () => {
       await ds.getRepository(Webhook).update(webhook.id, {
         filters: { conditions: [{ field: 'body', operator: 'contains', value: 'first' }] },
