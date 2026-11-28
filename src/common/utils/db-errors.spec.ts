@@ -1,5 +1,12 @@
-import { QueryFailedError } from 'typeorm';
-import { isUniqueViolation, isMissingTableError, isTransientDbError } from './db-errors';
+import { DatabaseError } from 'pg';
+import { type DataSource, QueryFailedError } from 'typeorm';
+import {
+  isDatabaseError,
+  isUniqueViolation,
+  isMissingTableError,
+  isTransientDbError,
+  markConnectFailures,
+} from './db-errors';
 
 // Realistic driver errors: better-sqlite3 / pg both throw an Error carrying a `code` property, which
 // TypeORM wraps in QueryFailedError (message copied from the driver error). better-sqlite3 messages are
@@ -123,5 +130,54 @@ describe('isTransientDbError', () => {
     ['null', null],
   ])('is false for %s', (_label, err) => {
     expect(isTransientDbError(err)).toBe(false);
+  });
+});
+
+describe('isDatabaseError', () => {
+  it.each([
+    ['a failed statement', qfe('database is locked', 'SQLITE_BUSY')],
+    ['a failed statement from another copy of typeorm', { name: 'QueryFailedError', message: 'x', driverError: {} }],
+    [
+      'PostgreSQL refusing a connection, unwrapped',
+      Object.assign(new DatabaseError('database "openwa" is not currently accepting connections', 118, 'error'), {
+        code: '55000',
+      }),
+    ],
+  ])('is true for %s', (_label, err) => {
+    expect(isDatabaseError(err)).toBe(true);
+  });
+
+  it.each([
+    ['a closed connection of another dependency', new Error('Connection is closed.')],
+    ['a refused socket', Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:6379'), { code: 'ECONNREFUSED' })],
+    ['null', null],
+  ])('is false for %s', (_label, err) => {
+    expect(isDatabaseError(err)).toBe(false);
+  });
+});
+
+describe('markConnectFailures', () => {
+  const refusedSocket = (): Error =>
+    Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED', syscall: 'connect' });
+
+  it('marks what the data connection could not connect with, and hands a connection through untouched', async () => {
+    const refused = refusedSocket();
+    const connection = [{}, () => undefined];
+    const driver = {
+      obtainMasterConnection: jest
+        .fn<Promise<unknown>, []>()
+        .mockRejectedValueOnce(refused)
+        .mockResolvedValueOnce(connection)
+        .mockRejectedValueOnce('not an error'),
+    };
+
+    markConnectFailures({ driver } as unknown as DataSource);
+
+    await expect(driver.obtainMasterConnection()).rejects.toBe(refused);
+    await expect(driver.obtainMasterConnection()).resolves.toBe(connection);
+    await expect(driver.obtainMasterConnection()).rejects.toBe('not an error');
+    expect(isDatabaseError(refused)).toBe(true);
+    // The same shape from any other client stays unattributed.
+    expect(isDatabaseError(refusedSocket())).toBe(false);
   });
 });

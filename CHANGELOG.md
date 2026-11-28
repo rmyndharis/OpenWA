@@ -123,6 +123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Plugins: a webhook delivery whose handler awaits a `ctx` call when the dispatch budget runs out always fails as a dispatch timeout (504), no longer sometimes with the handler's error.
 - Dashboard: an Escape pressed the moment a dialog or a hovered filter popover appears closes it, instead of being lost until its key handling was bound.
 - Sessions: when the status write for a ready, QR or terminal failure fails with a database error, the `session.authenticated` and `session.qr` notifications, their hooks, the ready follow-ups and the `session:error` hook still run while the node owns the session, instead of being dropped.
+- API: a request the database cannot serve, such as one PostgreSQL refuses a connection for, answers `503` instead of `500`.
 
 ## [0.32.1] - 2026-11-24
 

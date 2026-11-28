@@ -1,4 +1,5 @@
 import { Module, DynamicModule, Type } from '@nestjs/common';
+import { APP_FILTER } from '@nestjs/core';
 import { ServeStaticModule, ServeStaticModuleOptions } from '@nestjs/serve-static';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
@@ -48,6 +49,7 @@ import { AgentToolsModule } from './core/agent-tools/agent-tools.module';
 import { IntegrationModule } from './modules/integration/integration.module';
 import { SearchModule } from './modules/search/search.module';
 import { SqlitePermissionsBoot } from './database/sqlite-file-permissions';
+import { DatabaseUnavailableFilter } from './common/filters/database-unavailable.filter';
 
 // Only import QueueModule if explicitly enabled to avoid Redis connection errors
 const queueModules: Array<Type | DynamicModule> = [];
@@ -320,6 +322,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
   // Runs after every DataSource has initialized (they initialize eagerly in their provider
   // factories, and onApplicationBootstrap fires after every onModuleInit), tightening the SQLite
   // files that better-sqlite3 created with umask permissions back to owner-only.
-  providers: [SqlitePermissionsBoot],
+  // The filter answers every route's database failures, so a suite booting this module answers as production does.
+  providers: [SqlitePermissionsBoot, { provide: APP_FILTER, useClass: DatabaseUnavailableFilter }],
 })
 export class AppModule {}

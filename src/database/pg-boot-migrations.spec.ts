@@ -10,6 +10,7 @@ import {
   createBootDataSource,
 } from './pg-boot-migrations';
 import { postgresUtcExtra, utcTimestampTypes } from './postgres-utc';
+import { isDatabaseError } from '../common/utils/db-errors';
 
 // Protocol wiring of the boot-migration advisory lock: the lock must be taken BEFORE runMigrations
 // starts and dropped after it finishes (on success AND on migration failure), and the DataSource
@@ -62,6 +63,7 @@ describe('createBootDataSource (postgres boot migrations)', () => {
         calls.push('destroy');
         return Promise.resolve();
       }),
+      driver: { obtainMasterConnection: jest.fn<Promise<unknown>, []>().mockResolvedValue([{}, () => undefined]) },
     };
     const lockClient: AdvisoryLockClient = {
       connect: jest.fn(() => {
@@ -175,6 +177,22 @@ describe('createBootDataSource (postgres boot migrations)', () => {
     expect(await connectStatements(migratorOptions)).toEqual(["SET TIME ZONE 'UTC'"]);
     expect(await connectStatements(runtimeOptions)).toEqual(["SET TIME ZONE 'UTC'; SET statement_timeout = 30000"]);
     expect(runtime.dataSource.query).toHaveBeenCalled(); // the runtime pool's UTC pin is verified too
+  });
+
+  it('marks what the runtime connection fails to connect with, so a refused socket reads as the database', async () => {
+    const migrator = makeFakes();
+    const runtime = makeFakes();
+    const refused = Object.assign(new Error('connect ECONNREFUSED 10.0.0.5:5432'), { code: 'ECONNREFUSED' });
+    runtime.dataSource.driver.obtainMasterConnection.mockRejectedValue(refused);
+    const createDataSource = jest
+      .fn<DataSource, [DataSourceOptions]>()
+      .mockReturnValueOnce(migrator.dataSource as unknown as DataSource)
+      .mockReturnValueOnce(runtime.dataSource as unknown as DataSource);
+
+    await createBootDataSource(PG_OPTIONS, { createDataSource, createLockClient: migrator.deps.createLockClient });
+
+    await expect(runtime.dataSource.driver.obtainMasterConnection()).rejects.toBe(refused);
+    expect(isDatabaseError(refused)).toBe(true);
   });
 
   it('tears the runtime DataSource down when its session is not on UTC, after the chain is applied', async () => {

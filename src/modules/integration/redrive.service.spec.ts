@@ -246,6 +246,27 @@ describe('RedriveService', () => {
     expect(events.update).not.toHaveBeenCalled();
   });
 
+  // What the HTTP boundary answers each is pinned end to end; here, that both reach the caller as they were raised.
+  it('hands back a database failure before any dispatch and one after it unchanged', async () => {
+    const refused = new Error('Connection terminated unexpectedly');
+    setRows([]);
+    (repo.count as jest.Mock).mockRejectedValueOnce(refused);
+    await expect(makeSvc().redriveInstance('p', 'i', null)).rejects.toBe(refused);
+
+    setRows([
+      {
+        id: 'f4',
+        pluginId: 'p',
+        instanceId: 'i',
+        deliveryId: null,
+        payload: { route: 'chatwoot', ingress: { headers: {}, query: {}, body: '{}', rawBody: '{}' } },
+      } as { id: string },
+    ]);
+    (repo.update as jest.Mock).mockRejectedValueOnce(refused);
+    await expect(makeSvc().redriveInstance('p', 'i', null)).rejects.toBe(refused);
+    expect(ingressEnqueue.enqueue).toHaveBeenCalledTimes(1);
+  });
+
   it('mints distinct jobIds across retries even if a crash before DB update leaves attempts unchanged', async () => {
     const row = {
       id: 'f-crash',

@@ -1,4 +1,5 @@
-import { All, Controller, Param, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { All, Controller, Param, Query, Req, Res, UseFilters, UseGuards } from '@nestjs/common';
+import { BaseExceptionFilter } from '@nestjs/core';
 import { SkipThrottle } from '@nestjs/throttler';
 import { ApiTags, ApiOkResponse, ApiParam, ApiResponse } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
@@ -21,6 +22,9 @@ import { InstanceThrottlerGuard } from './instance-throttler.guard';
 // delivery's signature verifies. The client tier counts every request, including one the instance
 // bucket then sheds, so a tenant pushing one shared IP past INGRESS_IP_LIMIT sheds its neighbours too.
 @SkipThrottle()
+// Nest's own filter, chosen ahead of the global ones: a provider retries on the statuses this route documents, and
+// its 503 says the delivery was not stored, which a database failing mid-delivery cannot promise.
+@UseFilters(BaseExceptionFilter)
 @Controller('ingress')
 export class IngressController {
   constructor(private readonly ingress: IngressService) {}

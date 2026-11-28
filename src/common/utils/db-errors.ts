@@ -1,4 +1,5 @@
-import { QueryFailedError } from 'typeorm';
+import { DatabaseError } from 'pg';
+import { type DataSource, QueryFailedError } from 'typeorm';
 
 /** Structural view of the driver errors these predicates classify, so classification survives realms. */
 type DriverErrorShape = { code?: string; message?: string };
@@ -15,6 +16,34 @@ function isNamedError(err: unknown, name: string): err is DriverErrorWrapperShap
 
 function isQueryFailedErrorLike(err: unknown): err is DriverErrorWrapperShape {
   return err instanceof QueryFailedError || isNamedError(err, 'QueryFailedError');
+}
+
+/** What a PostgreSQL data connection failed to connect with (see markConnectFailures). */
+const connectFailures = new WeakSet<object>();
+
+/**
+ * Marks every error the data connection fails to hand out a connection with. A refused or timed-out socket, or the
+ * pool's own connect timeout, reaches the caller as a plain error that names no database, the shape a Redis or S3
+ * client raises too, so it is marked where the connection is acquired.
+ */
+export function markConnectFailures(dataSource: DataSource): void {
+  const driver = dataSource.driver as unknown as { obtainMasterConnection(): Promise<unknown> };
+  const obtain = driver.obtainMasterConnection.bind(driver);
+  driver.obtainMasterConnection = () =>
+    obtain().catch((error: unknown) => {
+      if (typeof error === 'object' && error !== null) connectFailures.add(error);
+      throw error;
+    });
+}
+
+/**
+ * Whether an error came from a database rather than another dependency: a statement that failed (TypeORM wraps every
+ * statement's failure, on both dialects), PostgreSQL refusing a connection, which reaches the caller unwrapped, or a
+ * connection the data connection could not open. A closed WhatsApp, Redis or browser connection says "connection"
+ * too, so a caller that cannot see which call failed asks this before reading an error as the database being away.
+ */
+export function isDatabaseError(err: unknown): boolean {
+  return isQueryFailedErrorLike(err) || err instanceof DatabaseError || connectFailures.has(err as object);
 }
 
 /**

@@ -8,6 +8,7 @@ import { ModuleRef } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { DatabaseError } from 'pg';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
@@ -481,5 +482,57 @@ describe('IntegrationInstanceController (e2e)', () => {
       expect(currentAfter.redriven).toBe(true);
       expect(oldAfter.redriven).toBe(false);
     });
+  });
+
+  // A database that fails once the redrive has dispatched a row keeps the 500 it answered: its 503 would invite a
+  // repeat, and a repeat dispatches the row it could not retire again, under a new job id.
+  it('keeps the 500 of a redrive whose retire write the database refused after the dispatch', async () => {
+    const failures = app.get<Repository<IntegrationDeliveryFailure>>(
+      getRepositoryToken(IntegrationDeliveryFailure, 'data'),
+    );
+    await request(app.getHttpServer())
+      .post(`${base}/chatwoot/instances`)
+      .set('X-API-Key', key)
+      .send({ instanceId: 'retire-refused' })
+      .expect(201);
+    const row = await failures.save(
+      failures.create({
+        direction: 'inbound',
+        pluginId: 'chatwoot',
+        instanceId: 'retire-refused',
+        deliveryId: 'dlv-retire-refused',
+        attempts: 0,
+        lastError: 'inline dispatch failed',
+        payload: { route: 'chatwoot', method: 'POST', ingress: { headers: {}, query: {}, body: '{}', rawBody: '{}' } },
+        redriven: false,
+      }),
+    );
+    const refused = Object.assign(
+      new DatabaseError('database "openwa" is not currently accepting connections', 118, 'error'),
+      { severity: 'FATAL', code: '55000' },
+    );
+    const write = failures.update.bind(failures);
+    const update = jest
+      .spyOn(failures, 'update')
+      .mockImplementation((criteria, partial) =>
+        'redriven' in partial && JSON.stringify(criteria).includes(row.id)
+          ? Promise.reject(refused)
+          : write(criteria, partial),
+      );
+    dispatchWebhookForInstance.mockClear();
+    try {
+      const res = await request(app.getHttpServer())
+        .post('/api/integration/instances/chatwoot/retire-refused/redrive')
+        .set('X-API-Key', key)
+        .expect(500);
+
+      expect(res.body).toEqual({ statusCode: 500, message: 'Internal server error' });
+      expect(dispatchWebhookForInstance).toHaveBeenCalledWith(
+        expect.objectContaining({ deliveryId: 'dlv-retire-refused' }),
+      );
+      expect(update).toHaveBeenCalled();
+    } finally {
+      update.mockRestore();
+    }
   });
 });

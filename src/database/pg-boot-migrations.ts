@@ -1,6 +1,7 @@
 import { Client, ClientConfig } from 'pg';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { createLogger } from '../common/services/logger.service';
+import { markConnectFailures } from '../common/utils/db-errors';
 import { assertDataConnectionUtc, postgresUtcExtra } from './postgres-utc';
 import { DeduplicateTerminalWebhookFailures1787200000000 } from './migrations/1787200000000-DeduplicateTerminalWebhookFailures';
 import { repairSqliteMessageFts } from './sqlite-message-fts';
@@ -174,6 +175,9 @@ export async function createBootDataSource(
     await dataSource.destroy().catch(() => undefined);
     throw error;
   }
+  // A server that is down or unreachable fails the connect with an error naming no database; marked here, a request
+  // it fails answers as one the database could not serve.
+  markConnectFailures(dataSource);
   return dataSource;
 }
 

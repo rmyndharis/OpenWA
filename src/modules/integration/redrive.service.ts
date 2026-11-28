@@ -9,6 +9,7 @@ import { IngressJobData } from '../queue/processors/ingress.processor';
 import { KeyedAsyncLock } from './ordering-lock';
 import { INGRESS_SHUTDOWN_WAIT_MS } from './integration.constants';
 import { createLogger } from '../../common/services/logger.service';
+import { markAfterEffect } from '../../common/filters/database-unavailable.filter';
 import { isAllSessionsScope } from '../../core/plugins/plugin-activation';
 
 const REDRIVE_BATCH_SIZE = 100;
@@ -102,76 +103,83 @@ export class RedriveService implements OnModuleDestroy {
       : await this.repo.find({ select: { id: true }, where, order, take: REDRIVE_BATCH_SIZE });
 
     let redriven = 0;
-    for (const { id } of rows) {
-      if (this.stop.signal.aborted) break;
-      let row: IntegrationDeliveryFailure | null;
-      try {
-        row = await this.repo.findOneBy(
-          Array.isArray(where) ? where.map(scope => ({ ...scope, id })) : { ...where, id },
-        );
-      } catch (rowError) {
-        this.logger.error(
-          'A dead letter could not be read and is skipped',
-          rowError instanceof Error ? rowError.message : String(rowError),
-          { id, action: 'ingress_redrive_row_unreadable' },
-        );
-        // Move an unreadable row behind the others so it cannot occupy every later window.
-        await this.repo.increment({ id }, 'attempts', 1).catch(() => undefined);
-        continue;
-      }
-      if (!row) continue;
-      if (this.stop.signal.aborted) break;
-      const stored = (row.payload ?? {}) as StoredDlqPayload;
-      // Re-mint a unique attempt-suffixed jobId so BullMQ never drops retries even if an earlier crash occurred between enqueue() and the DB update.
-      const jobId = `redrive:${row.id}:${Math.max(0, row.attempts ?? 0)}:${randomUUID()}`;
-      // Given the stop signal, enqueue() throws instead of dispatching inline once it has aborted: the
-      // row is left open and unchanged, since the plugin may already be torn down.
-      const result = await this.ingressEnqueue
-        .enqueue(
-          {
-            pluginId,
-            instanceId,
-            route: stored.route ?? '',
-            method: stored.method ?? 'POST',
-            deliveryId: row.deliveryId ?? row.id,
-            sessionId: row.sessionId ?? undefined,
-            providerConversationId: stored.providerConversationId,
-            payload: stored.ingress as IngressJobData['payload'],
-          },
-          jobId,
-          this.stop.signal,
-        )
-        .catch(err => {
-          if (this.stop.signal.aborted) return undefined;
-          throw err;
-        });
-      if (!result) break;
-      const { outcome, error } = result;
-      // Only retire the DLQ row once the replay was actually accepted (queued) or delivered. A swallowed
-      // inline-dispatch failure ('failed') leaves the row redriven=false so it stays redrivable, instead
-      // of silently marking it handled and permanently losing the event.
-      if (outcome !== 'failed') {
-        // Retire the matching ingress_events row FIRST (mirrors the reconciler's own ordering): a
-        // live-path inline failure leaves that row 'pending' next to this DLQ row, so without the mark
-        // the reconciler would sweep and replay the same delivery — a double delivery to the plugin.
-        // Conditional on 'pending' so a row the reconciler already closed is left alone; a legacy DLQ
-        // row (deliveryId null) predates persist-before-ack and has no event row to retire.
-        if (row.deliveryId) {
-          await this.events.update(
-            { pluginId, instanceId, providerDeliveryId: row.deliveryId, dispatchState: 'pending' },
-            { dispatchState: 'dispatched', lastDispatchAt: new Date(), payload: null },
+    let dispatched = false;
+    try {
+      for (const { id } of rows) {
+        if (this.stop.signal.aborted) break;
+        let row: IntegrationDeliveryFailure | null;
+        try {
+          row = await this.repo.findOneBy(
+            Array.isArray(where) ? where.map(scope => ({ ...scope, id })) : { ...where, id },
+          );
+        } catch (rowError) {
+          this.logger.error(
+            'A dead letter could not be read and is skipped',
+            rowError instanceof Error ? rowError.message : String(rowError),
+            { id, action: 'ingress_redrive_row_unreadable' },
+          );
+          // Move an unreadable row behind the others so it cannot occupy every later window.
+          await this.repo.increment({ id }, 'attempts', 1).catch(() => undefined);
+          continue;
+        }
+        if (!row) continue;
+        if (this.stop.signal.aborted) break;
+        const stored = (row.payload ?? {}) as StoredDlqPayload;
+        // Re-mint a unique attempt-suffixed jobId so BullMQ never drops retries even if an earlier crash occurred between enqueue() and the DB update.
+        const jobId = `redrive:${row.id}:${Math.max(0, row.attempts ?? 0)}:${randomUUID()}`;
+        dispatched = true;
+        // Given the stop signal, enqueue() throws instead of dispatching inline once it has aborted: the
+        // row is left open and unchanged, since the plugin may already be torn down.
+        const result = await this.ingressEnqueue
+          .enqueue(
+            {
+              pluginId,
+              instanceId,
+              route: stored.route ?? '',
+              method: stored.method ?? 'POST',
+              deliveryId: row.deliveryId ?? row.id,
+              sessionId: row.sessionId ?? undefined,
+              providerConversationId: stored.providerConversationId,
+              payload: stored.ingress as IngressJobData['payload'],
+            },
+            jobId,
+            this.stop.signal,
+          )
+          .catch(err => {
+            if (this.stop.signal.aborted) return undefined;
+            throw err;
+          });
+        if (!result) break;
+        const { outcome, error } = result;
+        // Only retire the DLQ row once the replay was actually accepted (queued) or delivered. A swallowed
+        // inline-dispatch failure ('failed') leaves the row redriven=false so it stays redrivable, instead
+        // of silently marking it handled and permanently losing the event.
+        if (outcome !== 'failed') {
+          // Retire the matching ingress_events row FIRST (mirrors the reconciler's own ordering): a
+          // live-path inline failure leaves that row 'pending' next to this DLQ row, so without the mark
+          // the reconciler would sweep and replay the same delivery — a double delivery to the plugin.
+          // Conditional on 'pending' so a row the reconciler already closed is left alone; a legacy DLQ
+          // row (deliveryId null) predates persist-before-ack and has no event row to retire.
+          if (row.deliveryId) {
+            await this.events.update(
+              { pluginId, instanceId, providerDeliveryId: row.deliveryId, dispatchState: 'pending' },
+              { dispatchState: 'dispatched', lastDispatchAt: new Date(), payload: null },
+            );
+          }
+          await this.repo.update({ id: row.id }, { redriven: true });
+          redriven++;
+        } else {
+          await this.repo.update(
+            { id: row.id },
+            { attempts: Math.max(0, row.attempts ?? 0) + 1, lastError: error ?? 'redrive dispatch failed' },
           );
         }
-        await this.repo.update({ id: row.id }, { redriven: true });
-        redriven++;
-      } else {
-        await this.repo.update(
-          { id: row.id },
-          { attempts: Math.max(0, row.attempts ?? 0) + 1, lastError: error ?? 'redrive dispatch failed' },
-        );
       }
+      const remaining = await this.repo.count({ where });
+      return { redriven, remaining, batchSize: REDRIVE_BATCH_SIZE };
+    } catch (error) {
+      // Once a row was dispatched a failure keeps its answer: a repeat dispatches again the row it could not retire.
+      throw dispatched ? markAfterEffect(error) : error;
     }
-    const remaining = await this.repo.count({ where });
-    return { redriven, remaining, batchSize: REDRIVE_BATCH_SIZE };
   }
 }

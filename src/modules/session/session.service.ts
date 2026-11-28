@@ -63,6 +63,7 @@ import { sessionNotFound } from './session-id.pipe';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { ListingMemo } from '../../common/utils/listing-memo';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
+import { markAfterEffect } from '../../common/filters/database-unavailable.filter';
 import { awaitNoOpenTransaction } from '../../common/utils/shared-connection';
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import {
@@ -800,8 +801,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           })
           .catch((error: unknown) => {
             if (request.state !== 'taken') this.withdrawStop(request);
-            // Its row read removed nothing yet, so a database that did not answer it is the retryable 503.
-            throw readFailed ? this.unavailableIfDatabaseDown(error, 'delete', id) : error;
+            // Its row read removed nothing yet, so a database that did not answer it is the retryable 503. What fails
+            // after it does so with the engine torn down, and keeps its answer.
+            throw readFailed ? this.unavailableIfDatabaseDown(error, 'delete', id) : markAfterEffect(error);
           });
       } finally {
         endDelete();
@@ -1297,8 +1299,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // not adopted. The foreign-node 409 keeps its claim (it is the peer's), and so does a 404.
       if (error instanceof BadGatewayException) await this.releaseAfterTeardown(id);
       this.discardStopMarkForMissingSession(id, request, error);
-      // Its row read stopped nothing yet, like the holder check before it.
-      throw readFailed ? this.unavailableIfDatabaseDown(error, 'stop', id) : error;
+      // Its row read stopped nothing yet, like the holder check before it; past them the stop has begun.
+      throw readFailed ? this.unavailableIfDatabaseDown(error, 'stop', id) : markAfterEffect(error);
     } finally {
       this.endStop(id, request);
       this.engineLifecycle.settleStopping(id, request.mark);
@@ -1343,8 +1345,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // Neither did a failure before an engine was found (the row read): only a request means one was.
       if (error instanceof BadRequestException) withdraw();
       if (request && !(error instanceof BadRequestException)) await this.releaseAfterTeardown(id);
-      // Its row read logged nothing out yet.
-      throw readFailed ? this.unavailableIfDatabaseDown(error, 'logout', id) : error;
+      // Its row read logged nothing out yet; past it the logout has begun.
+      throw readFailed ? this.unavailableIfDatabaseDown(error, 'logout', id) : markAfterEffect(error);
     } finally {
       if (request) this.endStop(id, request);
     }
@@ -1380,8 +1382,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // evict the engine: its request stands and it releases.
       if (error instanceof BadRequestException) withdraw();
       if (request && !(error instanceof BadRequestException)) await this.releaseAfterTeardown(id);
-      // Its row read killed nothing yet.
-      throw readFailed ? this.unavailableIfDatabaseDown(error, 'force-kill', id) : error;
+      // Its row read killed nothing yet; past it the kill has begun.
+      throw readFailed ? this.unavailableIfDatabaseDown(error, 'force-kill', id) : markAfterEffect(error);
     } finally {
       if (request) this.endStop(id, request);
     }
