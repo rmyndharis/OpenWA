@@ -148,8 +148,10 @@ export class SessionRows {
 
   constructor(private readonly deps: SessionRowsDeps) {
     deps.queue?.register('session', {
+      // Another record of the lane (a takeover's reap) is not journaled: the boot reaper runs at the next start.
       encode: record => {
-        const { sessionId: s, since: t, write } = record as KeptRowWrite;
+        if (!(record instanceof KeptRowWrite)) return undefined;
+        const { sessionId: s, since: t, write } = record;
         return { s, t, f: write.field, m: write.moves, b: write.blind, w: write.with, n: write.owners };
       },
       decode: (key, value) => this.restore(key, value),

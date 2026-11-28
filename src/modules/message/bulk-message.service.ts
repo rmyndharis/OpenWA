@@ -43,6 +43,8 @@ import {
 } from './send-pacing.service';
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { SessionService, linkPreviewDefault } from '../session/session.service';
+import { MessageProjector } from '../session/message-projector.service';
+import { isDatabaseUnavailable, type RecoveryLoss, type RecoveryRecord } from '../../common/utils/recovery-queue';
 import {
   HookExecutionError,
   HookManager,
@@ -152,6 +154,38 @@ interface BatchExecutionState {
 /** A terminal status only another writer can have put on a row this run still holds as PROCESSING. */
 const ENDED_ELSEWHERE = new Set<BatchStatus>([BatchStatus.FAILED, BatchStatus.COMPLETED]);
 
+const TAKEOVER_REASON = 'session taken from a lapsed node';
+
+/** The reap of a takeover the database refused, kept in the session lane to run once it answers (see keepReap). */
+class KeptReap implements RecoveryRecord {
+  readonly lane = 'session' as const;
+
+  constructor(
+    readonly key: string,
+    readonly sessionId: string,
+    readonly since: number,
+    private readonly steps: { reap(): Promise<void>; lost(reason: RecoveryLoss): void },
+  ) {}
+
+  bytes(): number {
+    return this.key.length;
+  }
+
+  /** It fails only what the vanished node left, under the claim that took its session over: right whatever its age. */
+  ageCapped(): boolean {
+    return false;
+  }
+
+  async retry(): Promise<boolean> {
+    await this.steps.reap();
+    return true;
+  }
+
+  lost(reason: RecoveryLoss): void {
+    this.steps.lost(reason);
+  }
+}
+
 @Injectable()
 export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = createLogger(BulkMessageService.name);
@@ -187,6 +221,9 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     // Optional trailing session lookup so bulk text sends honor the session's linkPreview default.
     @Optional()
     private readonly sessionService?: SessionService,
+    // Optional for the same reason: its queue keeps the reap of a takeover the database refused.
+    @Optional()
+    private readonly messageProjector?: MessageProjector,
   ) {}
 
   /**
@@ -195,9 +232,55 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
    * Registered here, before any bootstrap hook can start a session.
    */
   onModuleInit(): void {
-    this.ownership?.onAdoption(
-      (sessionId, manager) => this.reapProcessingBatches(sessionId, 'session taken from a lapsed node', manager),
-      true,
+    this.ownership?.onAdoption((sessionId, manager) => this.reapAdopted(sessionId, manager), true);
+  }
+
+  /**
+   * The reap of a takeover, in the transaction of its claim. On SQLite a statement the database refuses leaves that
+   * transaction to commit the claim without the reap, so a reap refused because the database cannot answer is kept
+   * and run again once it answers (on PostgreSQL the claim fails with it, and the kept reap finds its claim gone).
+   */
+  private async reapAdopted(sessionId: string, manager?: EntityManager): Promise<number> {
+    try {
+      return await this.reapProcessingBatches(sessionId, TAKEOVER_REASON, manager);
+    } catch (error) {
+      this.keepReap(sessionId, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Keep a refused reap of a takeover. It runs only while the claim that took the session over stands, in memory and
+   * on the row: under another claim, of this node or a peer, a batch left unfinished is that claim's own.
+   */
+  private keepReap(sessionId: string, error: unknown): void {
+    const queue = this.messageProjector?.recoveryQueue?.();
+    const ownership = this.ownership;
+    if (!queue || !ownership || !isDatabaseUnavailable(error)) return;
+    const claim = ownership.captureClaim(sessionId);
+    const key = `${sessionId}:batches`;
+    this.logger.warn(
+      'Keeping the reap of the batches a vanished node left, refused by the database, until it answers',
+      {
+        sessionId,
+        action: 'batch_reap_kept',
+      },
+    );
+    queue.park(
+      key,
+      new KeptReap(key, sessionId, Date.now(), {
+        reap: async () => {
+          if (claim() && (await ownership.hasLiveOwnClaim(sessionId))) {
+            await this.reapProcessingBatches(sessionId, TAKEOVER_REASON);
+          }
+        },
+        lost: reason =>
+          this.logger.error('A kept reap of the batches a vanished node left was given up', undefined, {
+            sessionId,
+            reason,
+            action: 'batch_reap_lost',
+          }),
+      }),
     );
   }
 
