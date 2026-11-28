@@ -38,6 +38,7 @@ import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity
 import { setTimeout } from 'node:timers/promises';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { ACTIVE_STATUSES, Session, SessionStatus } from './entities/session.entity';
+import { STOP_MOVES, type SessionRowWrite } from './session-row-park';
 import {
   CreateSessionDto,
   SessionConfigResponseDto,
@@ -916,7 +917,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     if (stops.givingBack) await stops.givingBack;
     const record = async (sessions: Repository<Session>): Promise<void> => {
       const { affected } = await sessions.update({ id, desiredState: IsNull() }, { desiredState: 'deleting' });
-      if (affected === 1) stops.recorded = true;
+      // A record an earlier delete left, whose refused clear is kept, is this delete's to clear.
+      if (affected === 1 || this.engineLifecycle.rows.takeClear(id)) stops.recorded = true;
       await sessions.update({ id, desiredState: 'stopped' }, { desiredState: 'deleting-stopped' });
     };
     if (!this.ownership) return record(this.sessionRepository);
@@ -963,6 +965,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       );
       return true;
     } catch (error) {
+      // Kept and written once the database answers: nothing else takes the record off a session no delete holds.
+      const moves: SessionRowWrite['moves'] = [['deleting-stopped', 'stopped']];
+      if (clear) moves.unshift(['deleting', null]);
+      const rows = this.engineLifecycle.rows;
+      rows.keep(id, { field: 'desiredState', moves, owners: rows.owners(true) }, error);
       this.logger.warn(`Could not clear the stop a failed delete recorded for session ${id}`, {
         sessionId: id,
         action: 'session_delete_stop_clear_failed',
@@ -1444,13 +1451,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   private async keepDownIfStoppedDuringStart(id: string, explicit: boolean, stopRequestsBefore: number): Promise<void> {
     const stoppedMeanwhile = this.stoppedSince(id, stopRequestsBefore, { taken: true });
     if (!explicit || !stoppedMeanwhile || this.engineLifecycle.isEngineActive(id)) return;
-    await this.keepDown(id).catch((error: unknown) =>
+    await this.keepDown(id).catch((error: unknown) => {
+      const rows = this.engineLifecycle.rows;
+      rows.keep(id, { field: 'desiredState', moves: STOP_MOVES, owners: rows.owners(true) }, error);
       this.logger.error(
         'Failed to record a stop that landed during a start',
         error instanceof Error ? error.message : String(error),
         { sessionId: id, action: 'start_keep_down_failed' },
-      ),
-    );
+      );
+    });
   }
 
   private markStopping(id: string, kind: StopRequest['kind']): StopRequest {

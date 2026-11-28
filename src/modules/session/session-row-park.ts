@@ -208,6 +208,25 @@ export class SessionRows {
     return held !== undefined && this.keep(sessionId, { field, moves: [[held, value]], blind: true, ...rest }, error);
   }
 
+  /** Whether a stop of the session is kept and not on the row yet: a start other than an operator's yields to it. */
+  keptStop(sessionId: string): boolean {
+    return (
+      this.kept(sessionId, 'desiredState')?.write.moves.some(([from, to]) => from === null && to !== null) === true
+    );
+  }
+
+  /**
+   * A delete begins on a row an earlier delete left marked, whose clear the database refused: the record is the new
+   * delete's to clear now, as one it wrote, and the kept clear goes. Landing in the middle of that delete, it would
+   * leave the row unmarked while the delete runs.
+   */
+  takeClear(sessionId: string): boolean {
+    const kept = this.kept(sessionId, 'desiredState');
+    if (!kept || after(kept.write.moves, 'deleting') !== null) return false;
+    this.deps.queue?.settle('session', kept.key);
+    return true;
+  }
+
   /** The push name was written since a binding was kept: the binding no longer writes the older one it carries. */
   pushNameWritten(sessionId: string): void {
     const kept = this.kept(sessionId, 'phone');

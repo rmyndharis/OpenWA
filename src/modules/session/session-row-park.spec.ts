@@ -44,6 +44,8 @@ describe('Session row writes the database refused, kept until it answers (SQLite
   let id: string;
   // Set while the database refuses the writes of the session rows it matches, with the error it answers.
   let refuse: ((patch: Record<string, unknown>) => Error | undefined) | undefined;
+  // Awaited before a write of a session row reaches the database, to run another request at that point.
+  let beforeWrite: ((patch: Record<string, unknown>) => Promise<void>) | undefined;
   let nodes: Array<{ queue: RecoveryQueue; lifecycle: SessionEngineLifecycle }>;
   const unavailable = (): Error => Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR' });
   const rejected = (): Error =>
@@ -56,6 +58,7 @@ describe('Session row writes the database refused, kept until it answers (SQLite
     jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
     jest.spyOn(LoggerService.prototype, 'log').mockImplementation(() => undefined);
     refuse = undefined;
+    beforeWrite = undefined;
     mockRetryPause = undefined;
     nodes = [];
     dir = mkdtempSync(join(tmpdir(), 'session-row-park-'));
@@ -67,10 +70,15 @@ describe('Session row writes the database refused, kept until it answers (SQLite
     }).initialize();
     sessions = ds.getRepository(Session);
     const update = sessions.update.bind(sessions);
-    jest.spyOn(sessions, 'update').mockImplementation((where, patch) => {
+    const write = (...[where, patch]: Parameters<typeof update>): ReturnType<typeof update> => {
       const error = refuse?.(patch);
       return error ? Promise.reject(error) : update(where, patch);
-    });
+    };
+    jest
+      .spyOn(sessions, 'update')
+      .mockImplementation((where, patch) =>
+        beforeWrite ? beforeWrite(patch).then(() => write(where, patch)) : write(where, patch),
+      );
     id = (
       await sessions.save(
         sessions.create({ name: 'kept', status: SessionStatus.DISCONNECTED, phone: '628111', config: {} }),
@@ -80,6 +88,7 @@ describe('Session row writes the database refused, kept until it answers (SQLite
 
   afterEach(async () => {
     refuse = undefined;
+    beforeWrite = undefined;
     mockRetryPause = undefined;
     jest.useRealTimers();
     // A reconnect an unlink armed must not fire after the test.
@@ -537,6 +546,162 @@ describe('Session row writes the database refused, kept until it answers (SQLite
       await node.queue.flush();
 
       expect((await rowOf()).phone).toBeNull();
+    });
+  });
+
+  describe('a stop record', () => {
+    /** The session runs; the database refuses the stop its force-kill records, and the kill goes on. */
+    async function keptKill(options: { nodeId?: string } = {}) {
+      const node = boot(options);
+      await node.service.start(id, { explicit: true });
+      refuse = patch => ('desiredState' in patch ? unavailable() : undefined);
+      await node.service.forceKill(id);
+      expect(node.engine.forceDestroy).toHaveBeenCalledTimes(1);
+      refuse = undefined;
+      return node;
+    }
+
+    it('of a force-kill is written once the database answers, and the kill does not wait for it', async () => {
+      const node = await keptKill();
+      expect((await rowOf()).desiredState).toBeNull();
+
+      await node.queue.flush();
+
+      expect((await rowOf()).desiredState).toBe('stopped');
+    });
+
+    it('of a force-kill survives a restart before the database answers, so auto-start leaves the session down', async () => {
+      crash(await keptKill());
+
+      const next = await restart();
+
+      expect((await rowOf()).desiredState).toBe('stopped');
+      expect(next.factory.create).not.toHaveBeenCalled();
+    });
+
+    it("is honoured by a start other than an operator's before it lands", async () => {
+      const node = await keptKill();
+
+      await expect(node.service.start(id)).rejects.toThrow('was stopped');
+
+      expect(node.factory.create).toHaveBeenCalledTimes(1);
+    });
+
+    it("gives way to an operator's start sent after it", async () => {
+      const node = await keptKill();
+      await node.service.start(id, { explicit: true });
+
+      await node.queue.flush();
+
+      expect((await rowOf()).desiredState).toBeNull();
+      expect(node.registry.has(id)).toBe(true);
+    });
+
+    it('gives way to another node that took the session since', async () => {
+      const node = await keptKill({ nodeId: 'node-a' });
+      await sessions.update(id, { nodeId: 'node-b', leaseExpiresAt: new Date(Date.now() + 60_000) });
+
+      await node.queue.flush();
+
+      expect((await rowOf()).desiredState).toBeNull();
+    });
+
+    it('of a force-kill lands after the kill handed the claim back', async () => {
+      const node = await keptKill({ nodeId: 'node-a' });
+      expect((await rowOf()).nodeId).toBeNull();
+
+      await node.queue.flush();
+
+      expect((await rowOf()).desiredState).toBe('stopped');
+    });
+
+    it('holds back no other kept write while a delete of its session runs on this node', async () => {
+      const other = (
+        await sessions.save(sessions.create({ name: 'other', status: SessionStatus.DISCONNECTED, config: {} }))
+      ).id;
+      const node = await keptKill();
+      await node.lifecycle.updateStatus(other, SessionStatus.INITIALIZING);
+      // The database still refuses: a pass finds it so, and from then on the queue tries one record first.
+      refuse = () => unavailable();
+      await expect(node.lifecycle.updateStatus(other, SessionStatus.FAILED)).rejects.toThrow('disk I/O error');
+      await node.queue.flush();
+      const endDelete = node.lifecycle.holdDelete(id);
+      refuse = undefined;
+
+      await node.queue.flush();
+      endDelete();
+
+      expect((await sessions.findOneByOrFail({ id: other })).status).toBe(SessionStatus.FAILED);
+      expect((await rowOf()).desiredState).toBe('stopped');
+    });
+
+    it('that a stop landing during a start re-records is written once the database answers', async () => {
+      // An explicit start clears the stop it read just after a new stop wrote the same record, erasing it.
+      await sessions.update(id, { desiredState: 'stopped' });
+      const node = boot();
+      let stopping: Promise<unknown> | undefined;
+      beforeWrite = async patch => {
+        if (stopping || patch.desiredState !== null) return;
+        stopping = node.service.stop(id);
+        await stopping;
+        refuse = next => (next.desiredState === 'stopped' ? unavailable() : undefined);
+      };
+
+      await node.service.start(id, { explicit: true });
+      beforeWrite = undefined;
+      refuse = undefined;
+      expect((await rowOf()).desiredState).toBeNull();
+      await node.queue.flush();
+
+      expect((await rowOf()).desiredState).toBe('stopped');
+      expect(node.registry.has(id)).toBe(false);
+    });
+
+    it('cleared after a failed delete, refused, is taken over by the next delete of the session', async () => {
+      const node = boot();
+      const fences = (node.lifecycle as unknown as { fences: { awaitPendingTeardown(name: string): Promise<void> } })
+        .fences;
+      jest
+        .spyOn(fences, 'awaitPendingTeardown')
+        .mockRejectedValueOnce(new Error('a logout teardown is pending'))
+        .mockRejectedValueOnce(new Error('a logout teardown is pending'));
+      refuse = patch => (patch.desiredState === null ? unavailable() : undefined);
+      await expect(node.service.delete(id)).rejects.toThrow('a logout teardown is pending');
+      refuse = undefined;
+
+      await expect(node.service.delete(id)).rejects.toThrow('a logout teardown is pending');
+
+      expect((await rowOf()).desiredState).toBeNull();
+      expect([...node.queue.records('session')]).toHaveLength(0);
+    });
+
+    it('cleared after a delete that failed before removing anything is written once the database answers', async () => {
+      const node = boot();
+      const fences = (node.lifecycle as unknown as { fences: { awaitPendingTeardown(name: string): Promise<void> } })
+        .fences;
+      jest.spyOn(fences, 'awaitPendingTeardown').mockRejectedValueOnce(new Error('a logout teardown is pending'));
+      refuse = patch => (patch.desiredState === null ? unavailable() : undefined);
+
+      await expect(node.service.delete(id)).rejects.toThrow('a logout teardown is pending');
+      refuse = undefined;
+      expect((await rowOf()).desiredState).toBe('deleting');
+      await node.queue.flush();
+
+      expect((await rowOf()).desiredState).toBeNull();
+    });
+
+    it('is given up with its own loss action', async () => {
+      const node = await keptKill();
+      refuse = patch => ('desiredState' in patch ? rejected() : undefined);
+
+      for (let pass = 0; pass < 3; pass++) await node.queue.flush();
+
+      expect((await rowOf()).desiredState).toBeNull();
+      expect(logged()).toHaveBeenCalledWith(
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ sessionId: id, reason: 'failures', action: 'session_stop_write_lost' }),
+      );
     });
   });
 });
