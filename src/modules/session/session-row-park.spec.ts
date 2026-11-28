@@ -54,6 +54,8 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
   let afterWrite: ((patch: Record<string, unknown>) => Promise<void>) | undefined;
   // Awaited once, after the next row read through findOne and before its answer comes back.
   let afterRead: (() => Promise<void>) | undefined;
+  // What each write of a session row that landed wrote, in the order their answers reached the caller.
+  let answeredWrites: Array<Record<string, unknown>>;
   let nodes: Array<{ queue: RecoveryQueue; lifecycle: SessionEngineLifecycle }>;
   const unavailable = (): Error => Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR' });
   const rejected = (): Error =>
@@ -104,6 +106,7 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
     afterRead = undefined;
     mockRetryPause = undefined;
     nodes = [];
+    answeredWrites = [];
     dir = mkdtempSync(join(tmpdir(), 'session-row-park-'));
     await ds.getRepository(Message).clear();
     await ds.getRepository(Session).clear();
@@ -113,7 +116,11 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       const error = refuse?.(patch);
       if (error) return Promise.reject(error);
       const held = afterWrite;
-      return held ? update(where, patch).then(async result => (await held(patch), result)) : update(where, patch);
+      return update(where, patch).then(async result => {
+        if (held) await held(patch);
+        answeredWrites.push(patch);
+        return result;
+      });
     };
     jest
       .spyOn(sessions, 'update')
@@ -271,6 +278,11 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
   const until = async (ready: () => boolean | Promise<boolean>): Promise<void> => {
     for (let turn = 0; turn < 5_000 && !(await ready()); turn++) await new Promise(resolve => setImmediate(resolve));
     expect(await ready()).toBe(true);
+  };
+  /** Resolves once a write that `match` picks, answered from now on, has landed and its caller has the answer. */
+  const landing = (match: (patch: Record<string, unknown>) => boolean): Promise<void> => {
+    const from = answeredWrites.length;
+    return until(() => answeredWrites.slice(from).some(match)).then(settle);
   };
   const keptOf = (node: { queue: RecoveryQueue }, field: string) =>
     node.queue.get('session', `${id}:${field}`) as { write: { with?: { pushName?: string } } } | undefined;
@@ -647,7 +659,7 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       await node.service.start(id, { explicit: true });
       refuse = patch => ('status' in patch || 'phone' in patch ? unavailable() : undefined);
       node.callbacks().onReady!('628111', pushName);
-      await settle();
+      await until(() => keptOf(node, 'status') !== undefined && keptOf(node, 'phone') !== undefined);
       refuse = undefined;
       return node;
     }
@@ -673,8 +685,11 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
     it('gives way to a later status and binding this process wrote', async () => {
       const node = await keptReady();
       await node.lifecycle.updateStatus(id, SessionStatus.DISCONNECTED);
+      const ready = landing(patch => patch.status === SessionStatus.READY);
+      const linked = landing(patch => patch.phone === '628222');
       node.callbacks().onReady!('628222', 'Bob');
-      await settle();
+      await ready;
+      await linked;
       await node.lifecycle.updateStatus(id, SessionStatus.DISCONNECTED);
 
       await node.queue.flush();
@@ -757,14 +772,16 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
     it('settles a status kept before it, when the engine reports READY again', async () => {
       const node = boot();
       await node.service.start(id, { explicit: true });
+      const ready = landing(patch => patch.status === SessionStatus.READY);
       node.callbacks().onReady!('628111', 'Alice');
-      await settle();
+      await ready;
       refuse = patch => ('status' in patch ? unavailable() : undefined);
       await expect(node.lifecycle.updateStatus(id, SessionStatus.DISCONNECTED)).rejects.toThrow('disk I/O error');
       refuse = undefined;
 
+      const again = landing(patch => patch.status === SessionStatus.READY);
       node.callbacks().onReady!('628111', 'Alice');
-      await settle();
+      await again;
       await node.queue.flush();
 
       expect((await rowOf()).status).toBe(SessionStatus.READY);
@@ -772,8 +789,9 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
 
     it('kept is settled by the clear of an unlink that follows it', async () => {
       const node = await keptReady();
+      const cleared = landing(patch => patch.phone === null);
       await node.lifecycle.handleEngineDisconnected(id, node.engine as never, 'LOGOUT');
-      await settle();
+      await cleared;
 
       await node.queue.flush();
 
@@ -811,7 +829,7 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       await node.service.start(id, { explicit: true });
       refuse = patch => ('phone' in patch ? unavailable() : undefined);
       await node.lifecycle.handleEngineDisconnected(id, node.engine as never, 'LOGOUT');
-      await settle();
+      await until(() => keptOf(node, 'phone') !== undefined);
       refuse = undefined;
       return node;
     }
@@ -836,8 +854,9 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
 
     it('gives way to the number a later READY linked', async () => {
       const node = await keptClear();
+      const linked = landing(patch => patch.phone === '628222');
       node.callbacks().onReady!('628222', 'Bob');
-      await settle();
+      await linked;
 
       await node.queue.flush();
 
@@ -918,11 +937,13 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
     async function keptUnlinkOnA() {
       const a = boot({ nodeId: 'node-a' });
       await a.service.start(id, { explicit: true });
+      const ready = landing(patch => patch.status === SessionStatus.READY);
+      const linked = landing(patch => patch.phone === '628111');
       a.callbacks().onReady!('628111', 'Alice');
-      await settle();
+      await ready;
+      await linked;
       refuse = patch => ('phone' in patch ? unavailable() : undefined);
       await a.lifecycle.handleEngineDisconnected(id, a.engine as never, 'LOGOUT');
-      // The clear waits behind the number the READY wrote.
       await until(() => keptOf(a, 'phone') !== undefined);
       refuse = undefined;
       return a;
@@ -933,8 +954,9 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       await lapse();
       const b = nodeB();
       await b.service.start(id, { explicit: true });
+      const linked = landing(patch => patch.phone === '628111');
       b.callbacks().onReady!('628111', 'Alice');
-      await settle();
+      await linked;
       await b.service.stop(id);
       expect(await rowOf()).toMatchObject({ nodeId: null, phone: '628111' });
     }
