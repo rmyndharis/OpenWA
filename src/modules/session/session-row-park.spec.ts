@@ -53,6 +53,8 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
   let beforeWrite: ((patch: Record<string, unknown>) => Promise<void>) | undefined;
   // Awaited after a write landed and before its answer comes back, as a database across the network answers late.
   let afterWrite: ((patch: Record<string, unknown>) => Promise<void>) | undefined;
+  // Awaited once, after the next row read through findOne and before its answer comes back.
+  let afterRead: (() => Promise<void>) | undefined;
   let nodes: Array<{ queue: RecoveryQueue; lifecycle: SessionEngineLifecycle }>;
   const unavailable = (): Error => Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR' });
   const rejected = (): Error =>
@@ -100,6 +102,7 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
     refuse = undefined;
     beforeWrite = undefined;
     afterWrite = undefined;
+    afterRead = undefined;
     mockRetryPause = undefined;
     nodes = [];
     dir = mkdtempSync(join(tmpdir(), 'session-row-park-'));
@@ -118,6 +121,14 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       .mockImplementation((where, patch) =>
         beforeWrite ? beforeWrite(patch).then(() => write(where, patch)) : write(where, patch),
       );
+    const findOne = sessions.findOne.bind(sessions);
+    jest.spyOn(sessions, 'findOne').mockImplementation(async options => {
+      const row = await findOne(options);
+      const held = afterRead;
+      afterRead = undefined;
+      if (held) await held();
+      return row;
+    });
     id = (
       await sessions.save(
         sessions.create({ name: 'kept', status: SessionStatus.DISCONNECTED, phone: '628111', config: {} }),
@@ -367,6 +378,34 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       await node.queue.flush();
 
       expect((await rowOf()).status).toBe(SessionStatus.DISCONNECTED);
+    });
+
+    it('that lands is what the next refused status write is guarded on', async () => {
+      const node = await keptFailed();
+      await node.queue.flush();
+      refuse = patch => ('status' in patch ? unavailable() : undefined);
+      await expect(node.lifecycle.updateStatus(id, SessionStatus.DISCONNECTED)).rejects.toThrow('disk I/O error');
+      refuse = undefined;
+
+      await node.queue.flush();
+
+      expect((await rowOf()).status).toBe(SessionStatus.DISCONNECTED);
+    });
+
+    it('refused after a read of the row that a landing write overtook is guarded on that write', async () => {
+      const node = boot();
+      await node.service.start(id, { explicit: true });
+      expect((await rowOf()).status).not.toBe(SessionStatus.READY);
+      // Another start reads the row, and the engine's READY lands while that read's answer is on its way.
+      afterRead = () => node.lifecycle.updateStatus(id, SessionStatus.READY).then(() => undefined);
+      await expect(node.lifecycle.start(id)).rejects.toThrow('already started');
+      refuse = patch => ('status' in patch ? unavailable() : undefined);
+      await expect(node.lifecycle.updateStatus(id, SessionStatus.FAILED)).rejects.toThrow('disk I/O error');
+      refuse = undefined;
+
+      await node.queue.flush();
+
+      expect((await rowOf()).status).toBe(SessionStatus.FAILED);
     });
 
     it('of a session deleted meanwhile is dropped with it, and nothing is lost', async () => {
