@@ -13,7 +13,7 @@ jest.mock('node:timers/promises', () => {
 });
 
 import 'reflect-metadata';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DataSource, Repository } from 'typeorm';
@@ -145,7 +145,8 @@ describe('Session row writes the database refused, kept until it answers (SQLite
     const projector = {
       holdsInbound: false,
       settleParkedChanges: jest.fn().mockResolvedValue(undefined),
-      forgetSession: jest.fn(),
+      // As the projector does: what is kept for a removed session goes with it.
+      forgetSession: (sessionId: string) => queue.forget(sessionId),
     };
     const lifecycle = new SessionEngineLifecycle(
       sessions,
@@ -308,6 +309,47 @@ describe('Session row writes the database refused, kept until it answers (SQLite
         undefined,
         expect.objectContaining({ sessionId: id, reason: 'failures', action: 'session_status_write_lost' }),
       );
+    });
+
+    it('keeps one write per session, the newest refused one over the older', async () => {
+      const node = await keptFailed();
+      refuse = patch => ('status' in patch ? unavailable() : undefined);
+      await expect(node.lifecycle.updateStatus(id, SessionStatus.DISCONNECTED)).rejects.toThrow('disk I/O error');
+      refuse = undefined;
+      expect([...node.queue.records('session')]).toHaveLength(1);
+
+      await node.queue.flush();
+
+      expect((await rowOf()).status).toBe(SessionStatus.DISCONNECTED);
+    });
+
+    it('of a session deleted meanwhile is dropped with it, and nothing is lost', async () => {
+      const node = await keptFailed();
+
+      // What a committed delete does: the row goes, then what this process kept of the session.
+      await sessions.delete(id);
+      node.lifecycle.forgetSession(id);
+      await node.queue.flush();
+
+      expect([...node.queue.records('session')]).toHaveLength(0);
+      expect(logged()).not.toHaveBeenCalledWith(
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ sessionId: id }),
+      );
+    });
+
+    it('that the journal holds unreadable is let go at the next start', async () => {
+      const unreadable = [
+        { l: 'session', k: `${id}:status`, v: { s: id } },
+        { l: 'session', k: `${id}:phone`, v: { s: id, t: 1, f: 'phone', m: [1] } },
+      ];
+      writeFileSync(join(dir, 'recovery-journal.jsonl'), unreadable.map(line => `${JSON.stringify(line)}\n`).join(''));
+
+      const next = await restart();
+
+      expect([...next.queue.records('session')]).toHaveLength(0);
+      expect(next.factory.create).toHaveBeenCalledTimes(1);
     });
 
     it('of a launch retired as it started is written once the database answers', async () => {
@@ -688,6 +730,22 @@ describe('Session row writes the database refused, kept until it answers (SQLite
       await node.queue.flush();
 
       expect((await rowOf()).desiredState).toBeNull();
+    });
+
+    it('of a force-kill outlasts the clear of a delete that failed after it, both refused', async () => {
+      const node = await keptKill();
+      const fences = (node.lifecycle as unknown as { fences: { awaitPendingTeardown(name: string): Promise<void> } })
+        .fences;
+      jest.spyOn(fences, 'awaitPendingTeardown').mockRejectedValueOnce(new Error('a logout teardown is pending'));
+      refuse = patch => (patch.desiredState === null ? unavailable() : undefined);
+
+      await expect(node.service.delete(id)).rejects.toThrow('a logout teardown is pending');
+      refuse = undefined;
+      expect((await rowOf()).desiredState).toBe('deleting');
+      expect([...node.queue.records('session')]).toHaveLength(1);
+      await node.queue.flush();
+
+      expect((await rowOf()).desiredState).toBe('stopped');
     });
 
     it('is given up with its own loss action', async () => {
