@@ -2,6 +2,12 @@ jest.mock('dns/promises', () => ({
   lookup: jest.fn().mockResolvedValue([{ address: '93.184.216.34', family: 4 }]),
 }));
 
+// The webhook backoff waits through these: a test holds them to land a change before a retry, whatever its speed.
+jest.mock('node:timers/promises', () => {
+  const actual = jest.requireActual<typeof import('node:timers/promises')>('node:timers/promises');
+  return { ...actual, setTimeout: jest.fn(actual.setTimeout) };
+});
+
 jest.mock('undici', () => {
   const actual = jest.requireActual<typeof import('undici')>('undici');
   return { __esModule: true, ...actual, fetch: jest.fn() };
@@ -33,9 +39,13 @@ import { RECOVERY_MAX_RECORDS } from '../../common/utils/recovery-queue';
 import type { BaileysMessageStoreService } from '../../engine/adapters/baileys-message-store.service';
 import type { ChatStateStoreService } from '../../engine/adapters/baileys-chat-state-store.service';
 import { LoggerService } from '../../common/services/logger.service';
+import { waitUntil } from '../../../test/helpers/wait-until';
+import * as timersPromises from 'node:timers/promises';
 import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
 const CHAT = '628111@c.us';
+const backoff = timersPromises.setTimeout as unknown as jest.Mock;
+const realBackoff = jest.requireActual<typeof import('node:timers/promises')>('node:timers/promises').setTimeout;
 
 /** Webhook events dispatched while the database cannot answer: kept, and dispatched once it does. */
 describe('Webhook events the database refused, kept until it answers (SQLite)', () => {
@@ -181,6 +191,48 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
     jest.restoreAllMocks();
   });
 
+  /**
+   * A dispatch whose first attempt fails, `between` landing while its retry waits, then the retry. The retry's backoff
+   * is held until `between` is done (or until `between` lets it go), so how long that takes changes nothing.
+   */
+  const retriedAfter = async (
+    dispatch: () => Promise<unknown>,
+    between: (letRetryRun: () => void) => Promise<unknown>,
+  ): Promise<void> => {
+    const held: Array<() => void> = [];
+    let letGo = false;
+    const letRetryRun = (): void => {
+      letGo = true;
+      for (const go of held.splice(0)) go();
+    };
+    // Every wait of at least the retry delay is a backoff; shorter waits (polls) run as they do.
+    backoff.mockImplementation((ms: number, value?: unknown, options?: { signal?: AbortSignal }) =>
+      letGo || ms < retryDelay
+        ? realBackoff(ms, value, options)
+        : new Promise((resolve, reject) => {
+            const signal = options?.signal;
+            const abort = (): void =>
+              reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError', code: 'ABORT_ERR' }));
+            if (signal?.aborted) return abort();
+            signal?.addEventListener('abort', abort, { once: true });
+            held.push(() => {
+              signal?.removeEventListener('abort', abort);
+              resolve(value);
+            });
+          }),
+    );
+    try {
+      const dispatched = dispatch();
+      await waitUntil(() => mockFetch.mock.calls.length === 1);
+      await between(letRetryRun);
+      await settle();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      letRetryRun();
+      await dispatched;
+    } finally {
+      backoff.mockImplementation(realBackoff);
+    }
+  };
   const settle = async (turns = 60): Promise<void> => {
     for (let turn = 0; turn < turns; turn++) await new Promise(resolve => setImmediate(resolve));
   };
@@ -555,19 +607,16 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
 
   describe('a message.edited delivery waiting to retry', () => {
     const edit = (body: string) => ({ messageId: 'Z-4', chatId: CHAT, from: CHAT, body, fromMe: false, type: 'text' });
-    const waitFor = async (until: () => boolean | Promise<boolean>): Promise<void> => {
-      for (const deadline = Date.now() + 10_000; !(await until());) {
-        if (Date.now() > deadline) throw new Error('Timed out waiting for condition');
-        await new Promise(resolve => setTimeout(resolve, 20));
-      }
-    };
     const edits = (): unknown[] =>
       posted()
         .filter(post => post.event === 'message.edited')
         .map(post => post.data.body);
     const failures = (): Promise<number> => ds.getRepository(WebhookDeliveryFailure).count();
     /** The edit's first attempt failed and its retry waits; `between` runs before the retry. */
-    const failedOnce = async (between: () => Promise<unknown>, body = 'secret edit'): Promise<void> => {
+    const failedOnce = async (
+      between: (letRetryRun: () => void) => Promise<unknown>,
+      body = 'secret edit',
+    ): Promise<void> => {
       retryDelay = 800;
       await ds.getRepository(Webhook).update(webhook.id, { retryCount: 2, events: ['message.edited'] });
       await ds.getRepository(Message).insert({
@@ -582,13 +631,11 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
         timestamp: 1_700_000_000,
       });
       mockFetch.mockResolvedValueOnce(new Response('down', { status: 500 }));
-      // Not awaited: a dispatch resolves once every attempt, retries included, has run.
-      const dispatched = webhookService.dispatch(sessionId, 'message.edited', edit(body));
-      await waitFor(() => mockFetch.mock.calls.length === 1);
-      await between();
-      await settle();
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      await dispatched;
+      await retriedAfter(
+        // Not awaited: a dispatch resolves once every attempt, retries included, has run.
+        () => webhookService.dispatch(sessionId, 'message.edited', edit(body)),
+        between,
+      );
     };
 
     it.each([
@@ -605,7 +652,7 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
     });
 
     it('waits while a revoke of the message is kept, and sends nothing once it closed the row', async () => {
-      await failedOnce(async () => {
+      await failedOnce(async letRetryRun => {
         outage = 'on';
         projector.handleMessageRevoked(
           sessionId,
@@ -615,7 +662,8 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
         );
         await settle();
         // Past the backoff the retry finds the row unread and the revoke kept: it waits.
-        await new Promise(resolve => setTimeout(resolve, 1200));
+        letRetryRun();
+        await settle();
         expect(mockFetch).toHaveBeenCalledTimes(1);
         await recover();
       });
@@ -709,13 +757,7 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
       });
       outage = 'outbox writes';
       mockFetch.mockResolvedValueOnce(new Response('down', { status: 500 }));
-      // Not awaited: a dispatch resolves once every attempt, retries included, has run.
-      const dispatched = webhookService.dispatch(sessionId, 'message.received', msg);
-      await waitFor(() => mockFetch.mock.calls.length === 1);
-      await change();
-      await settle();
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      await dispatched;
+      await retriedAfter(() => webhookService.dispatch(sessionId, 'message.received', msg), change);
     };
     const keptCopy = async (): Promise<Record<string, unknown> | null | undefined> =>
       (
