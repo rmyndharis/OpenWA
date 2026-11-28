@@ -6828,7 +6828,10 @@ Re-dispatch one bounded batch of dead-lettered inbound deliveries for an integra
 then oldest-first, up to `batchSize` (100) — so a row that keeps failing moves behind never-retried
 rows instead of livelocking the window, while staying redrivable. `remaining` reports the DLQ depth
 still outstanding after this batch. Only rows written under the instance's current session binding are
-redriven and counted; rows of an earlier binding stay in the dead-letter table.
+redriven and counted; rows of an earlier binding stay in the dead-letter table. A row another redrive is
+dispatching is left out of the batch but counted in `remaining`, and so is one a redrive took and never
+settled (its node stopped, or the database refused the write after the dispatch) until five minutes after
+it was taken, when a redrive takes it again and its handler may receive it twice (doc 25, section 25.7).
 
 **Auth:** API key (ADMIN) · **Scope:** session-scoped (a key restricted to `allowedSessions` may only
 redrive an instance whose current `sessionScope` is inside that allowlist; out of scope and missing

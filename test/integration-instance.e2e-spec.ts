@@ -3,6 +3,7 @@
 process.env.ALLOW_DEV_API_KEY = 'true';
 process.env.BASE_URL = 'https://api.example.com';
 
+import { randomUUID } from 'crypto';
 import { INestApplication } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
@@ -18,6 +19,9 @@ import { AuthService } from '../src/modules/auth/auth.service';
 import { AuditAction, AuditLog } from '../src/modules/audit/entities/audit-log.entity';
 import { ApiKeyRole } from '../src/modules/auth/entities/api-key.entity';
 import { IntegrationDeliveryFailure } from '../src/modules/integration/entities/integration-delivery-failure.entity';
+import { IngressEvent } from '../src/modules/integration/entities/ingress-event.entity';
+import { IngressReconcilerService } from '../src/modules/integration/ingress-reconciler.service';
+import type { IngressJobData } from '../src/modules/queue/processors/ingress.processor';
 import { InfraDataService } from '../src/modules/infra/infra-data.service';
 import { ScopeBindingService } from '../src/modules/integration/scope-binding.service';
 
@@ -79,6 +83,8 @@ describe('IntegrationInstanceController (e2e)', () => {
         enablePlugin: jest.fn().mockResolvedValue(undefined),
         // Nothing to restore at boot: what waits for the restore (the recovery queue) goes on at once.
         whenRestored: () => Promise.resolve(),
+        restorePendingIds: () => [],
+        isRestorePending: () => false,
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
       })
@@ -484,55 +490,143 @@ describe('IntegrationInstanceController (e2e)', () => {
     });
   });
 
-  // A database that fails once the redrive has dispatched a row keeps the 500 it answered: its 503 would invite a
-  // repeat, and a repeat dispatches the row it could not retire again, under a new job id.
-  it('keeps the 500 of a redrive whose retire write the database refused after the dispatch', async () => {
+  // Whatever write fails once a redrive has dispatched a row, neither a second redrive nor the reconciler sends it
+  // again.
+  it('dispatches a redriven row once though every write after its dispatch fails', async () => {
+    const failures = app.get<Repository<IntegrationDeliveryFailure>>(
+      getRepositoryToken(IntegrationDeliveryFailure, 'data'),
+    );
+    const events = app.get<Repository<IngressEvent>>(getRepositoryToken(IngressEvent, 'data'));
+    await request(app.getHttpServer())
+      .post(`${base}/chatwoot/instances`)
+      .set('X-API-Key', key)
+      .send({ instanceId: 'retire-refused' })
+      .expect(201);
+    const deliveryId = 'dlv-retire-refused';
+    const ingress = { headers: {}, query: {}, body: '{}', rawBody: '{}' };
+    // A live-path inline failure leaves its event pending, with the payload the reconciler replays, beside the dead letter.
+    await events.save(
+      events.create({
+        id: randomUUID(),
+        pluginId: 'chatwoot',
+        instanceId: 'retire-refused',
+        providerDeliveryId: deliveryId,
+        route: 'chatwoot',
+        payload: { ...ingress, method: 'POST' },
+        payloadHash: null,
+        sessionId: null,
+        dispatchState: 'pending',
+        dispatchAttempts: 1,
+        lastDispatchAt: null,
+      }),
+    );
+    await failures.save(
+      failures.create({
+        direction: 'inbound',
+        pluginId: 'chatwoot',
+        instanceId: 'retire-refused',
+        deliveryId,
+        attempts: 0,
+        lastError: 'inline dispatch failed',
+        payload: { route: 'chatwoot', method: 'POST', ingress },
+        redriven: false,
+      }),
+    );
+
+    // The database stops answering writes the moment the row goes out.
+    let away = false;
+    const refused = () =>
+      Object.assign(new DatabaseError('database "openwa" is not currently accepting connections', 118, 'error'), {
+        severity: 'FATAL',
+        code: '55000',
+      });
+    const writeFailure = failures.update.bind(failures);
+    const writeEvent = events.update.bind(events);
+    const failureUpdate = jest
+      .spyOn(failures, 'update')
+      .mockImplementation((criteria, partial) => (away ? Promise.reject(refused()) : writeFailure(criteria, partial)));
+    const eventUpdate = jest
+      .spyOn(events, 'update')
+      .mockImplementation((criteria, partial) => (away ? Promise.reject(refused()) : writeEvent(criteria, partial)));
+    dispatchWebhookForInstance.mockReset();
+    dispatchWebhookForInstance.mockImplementationOnce(() => {
+      away = true;
+      return Promise.resolve();
+    });
+    const dispatches = () =>
+      (dispatchWebhookForInstance.mock.calls as IngressJobData[][]).filter(([job]) => job.deliveryId === deliveryId)
+        .length;
+    try {
+      await request(app.getHttpServer())
+        .post('/api/integration/instances/chatwoot/retire-refused/redrive')
+        .set('X-API-Key', key);
+      away = false;
+      await app
+        .get(IngressReconcilerService)
+        .sweep({ intervalMs: 60_000, graceMs: 0, batchSize: 50, maxAttempts: 5 }, new Date(Date.now() + 1000));
+      await request(app.getHttpServer())
+        .post('/api/integration/instances/chatwoot/retire-refused/redrive')
+        .set('X-API-Key', key)
+        .expect(201);
+
+      expect(dispatches()).toBe(1);
+    } finally {
+      failureUpdate.mockRestore();
+      eventUpdate.mockRestore();
+      dispatchWebhookForInstance.mockReset();
+    }
+  });
+
+  // Rows of the batch may already have gone out, so a refused put-back is no database to simply retry against.
+  it('answers 500, not 503, to a redrive whose failed replay the database would not put back', async () => {
     const failures = app.get<Repository<IntegrationDeliveryFailure>>(
       getRepositoryToken(IntegrationDeliveryFailure, 'data'),
     );
     await request(app.getHttpServer())
       .post(`${base}/chatwoot/instances`)
       .set('X-API-Key', key)
-      .send({ instanceId: 'retire-refused' })
+      .send({ instanceId: 'put-back-refused' })
       .expect(201);
-    const row = await failures.save(
+    await failures.save(
       failures.create({
         direction: 'inbound',
         pluginId: 'chatwoot',
-        instanceId: 'retire-refused',
-        deliveryId: 'dlv-retire-refused',
+        instanceId: 'put-back-refused',
+        deliveryId: null,
         attempts: 0,
         lastError: 'inline dispatch failed',
         payload: { route: 'chatwoot', method: 'POST', ingress: { headers: {}, query: {}, body: '{}', rawBody: '{}' } },
         redriven: false,
       }),
     );
-    const refused = Object.assign(
-      new DatabaseError('database "openwa" is not currently accepting connections', 118, 'error'),
-      { severity: 'FATAL', code: '55000' },
-    );
+    const refused = () =>
+      Object.assign(new DatabaseError('database "openwa" is not currently accepting connections', 118, 'error'), {
+        severity: 'FATAL',
+        code: '55000',
+      });
     const write = failures.update.bind(failures);
-    const update = jest
+    // The put-back of a failed replay carries its error; every other write goes through.
+    const putBack = jest
       .spyOn(failures, 'update')
       .mockImplementation((criteria, partial) =>
-        'redriven' in partial && JSON.stringify(criteria).includes(row.id)
-          ? Promise.reject(refused)
-          : write(criteria, partial),
+        'lastError' in (partial as object) ? Promise.reject(refused()) : write(criteria, partial),
       );
-    dispatchWebhookForInstance.mockClear();
+    dispatchWebhookForInstance.mockReset();
+    dispatchWebhookForInstance.mockRejectedValueOnce(new Error('plugin unavailable'));
     try {
       const res = await request(app.getHttpServer())
-        .post('/api/integration/instances/chatwoot/retire-refused/redrive')
-        .set('X-API-Key', key)
-        .expect(500);
+        .post('/api/integration/instances/chatwoot/put-back-refused/redrive')
+        .set('X-API-Key', key);
 
+      expect(res.status).toBe(500);
       expect(res.body).toEqual({ statusCode: 500, message: 'Internal server error' });
-      expect(dispatchWebhookForInstance).toHaveBeenCalledWith(
-        expect.objectContaining({ deliveryId: 'dlv-retire-refused' }),
+      expect(putBack).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ lastError: 'plugin unavailable' }),
       );
-      expect(update).toHaveBeenCalled();
     } finally {
-      update.mockRestore();
+      putBack.mockRestore();
+      dispatchWebhookForInstance.mockReset();
     }
   });
 });

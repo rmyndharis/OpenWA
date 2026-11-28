@@ -182,14 +182,18 @@ describe('RedriveController after an instance was rebound', () => {
             : null,
         );
       }),
-      update: jest.fn((where: { id: string }, patch: Partial<Row>) => {
-        Object.assign(rows.find(row => row.id === where.id) ?? {}, patch);
-        return Promise.resolve();
+      // A conditional write, as the claim is: it takes the row only while it still matches.
+      update: jest.fn((where: { id: string; redriven?: boolean }, patch: Partial<Row>) => {
+        const row = rows.find(
+          row => row.id === where.id && (where.redriven === undefined || row.redriven === where.redriven),
+        );
+        if (row) Object.assign(row, patch);
+        return Promise.resolve({ affected: row ? 1 : 0 });
       }),
       count: jest.fn(() => Promise.resolve(rows.filter(row => !row.redriven).length)),
       increment: jest.fn(),
     };
-    const events = { update: jest.fn().mockResolvedValue(undefined) };
+    const events = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
     const enqueue = jest
       .fn<Promise<{ outcome: string }>, [{ deliveryId: string; sessionId?: string }]>()
       .mockResolvedValue({

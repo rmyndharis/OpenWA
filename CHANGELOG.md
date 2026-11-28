@@ -125,6 +125,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sessions: when the status write for a ready, QR or terminal failure fails with a database error, the `session.authenticated` and `session.qr` notifications, their hooks, the ready follow-ups and the `session:error` hook still run while the node owns the session, instead of being dropped.
 - API: a request the database cannot serve, such as one PostgreSQL refuses a connection for, answers `503` instead of `500`.
 - Recovery: keep a write the database refused because its host did not resolve or could not be reached, instead of giving it up after three tries.
+- Integration: a redrive takes each delivery before it dispatches it, so neither the reconciler nor another redrive sends it again meanwhile; a take left unsettled by a stopped node or a failed database write is taken again after five minutes.
 
 ## [0.32.1] - 2026-11-24
 
