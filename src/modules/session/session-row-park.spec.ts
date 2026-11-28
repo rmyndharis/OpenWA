@@ -103,8 +103,8 @@ describe('Session row writes the database refused, kept until it answers (SQLite
    * One process over the shared database: its journal (opened at start), queue, lifecycle and session service. With
    * `nodeId` it holds claims as that node does in a cluster.
    */
-  function boot({ nodeId }: { nodeId?: string } = {}) {
-    const journal = new RecoveryJournal(join(dir, 'recovery-journal.jsonl'));
+  function boot({ nodeId, journalFile = 'recovery-journal.jsonl' }: { nodeId?: string; journalFile?: string } = {}) {
+    const journal = new RecoveryJournal(join(dir, journalFile));
     // Only the test's own flush runs a pass.
     const queue = new RecoveryQueue({
       ...recoveryQueueOptions(false, 60_000),
@@ -494,6 +494,21 @@ describe('Session row writes the database refused, kept until it answers (SQLite
       expect(await rowOf()).toMatchObject({ phone: '628111', nodeId: 'node-a' });
     });
 
+    it('survives a stop of its node while the database still refuses it, the claim kept for the next start', async () => {
+      const node = await keptReady('Alice', { nodeId: 'node-a' });
+      refuse = patch => ('status' in patch || 'phone' in patch ? unavailable() : undefined);
+      await node.service.onModuleDestroy();
+      refuse = undefined;
+      expect((await rowOf()).nodeId).toBe('node-a');
+      crash(node);
+
+      const next = await restart({ nodeId: 'node-a' });
+      next.ownership?.stopHeartbeat();
+
+      expect(next.factory.create).toHaveBeenCalledTimes(1);
+      expect((await rowOf()).phone).toBe('628111');
+    });
+
     it('keeps the push name the engine synced after it', async () => {
       const node = await keptReady('');
       node.callbacks().onPushNameChanged!('Alice');
@@ -591,6 +606,78 @@ describe('Session row writes the database refused, kept until it answers (SQLite
     });
   });
 
+  describe('a later write by another node that puts back the value a kept write replaced', () => {
+    /** node-a's database stayed away past its lease, which lapsed: node-b may take the session over. */
+    const lapse = (): Promise<unknown> => sessions.update(id, { leaseExpiresAt: new Date(Date.now() - 1_000) });
+    const nodeB = () => boot({ nodeId: 'node-b', journalFile: 'node-b.jsonl' });
+
+    /** node-a runs the session linked to 628111; WhatsApp unlinks it, and the database refuses the clear. */
+    async function keptUnlinkOnA() {
+      const a = boot({ nodeId: 'node-a' });
+      await a.service.start(id, { explicit: true });
+      a.callbacks().onReady!('628111', 'Alice');
+      await settle();
+      refuse = patch => ('phone' in patch ? unavailable() : undefined);
+      await a.lifecycle.handleEngineDisconnected(id, a.engine as never, 'LOGOUT');
+      await settle();
+      refuse = undefined;
+      return a;
+    }
+
+    /** node-b takes the session over, the same number links again there, and node-b stops it, handing it back. */
+    async function relinkedOnB(): Promise<void> {
+      await lapse();
+      const b = nodeB();
+      await b.service.start(id, { explicit: true });
+      b.callbacks().onReady!('628111', 'Alice');
+      await settle();
+      await b.service.stop(id);
+      expect(await rowOf()).toMatchObject({ nodeId: null, phone: '628111' });
+    }
+
+    it('wins over a kept stop record: an operator start on that node, which then hands the session back', async () => {
+      const a = boot({ nodeId: 'node-a' });
+      await a.service.start(id, { explicit: true });
+      refuse = patch => ('desiredState' in patch ? unavailable() : undefined);
+      await a.service.forceKill(id);
+      refuse = undefined;
+      await lapse();
+      const b = nodeB();
+      b.factory.create.mockImplementationOnce(() => {
+        throw new Error('EACCES: permission denied');
+      });
+      await expect(b.service.start(id, { explicit: true })).rejects.toThrow('EACCES');
+      expect(await rowOf()).toMatchObject({ nodeId: null, desiredState: null });
+
+      await a.queue.flush();
+
+      expect((await rowOf()).desiredState).toBeNull();
+    });
+
+    it('wins over a kept phone clear: the same number linked again on that node, which then stops', async () => {
+      const a = await keptUnlinkOnA();
+      await relinkedOnB();
+
+      await a.queue.flush();
+
+      expect((await rowOf()).phone).toBe('628111');
+    });
+
+    it('wins over a kept phone clear when this node takes the session back afterwards', async () => {
+      const a = await keptUnlinkOnA();
+      await relinkedOnB();
+      // node-a's heartbeat finds the claim gone and tears its engine down, then an operator starts the session there.
+      await a.ownership!.renew();
+      await a.lifecycle.stopOrphanEngines([id]);
+      await a.service.start(id, { explicit: true });
+      expect((await rowOf()).nodeId).toBe('node-a');
+
+      await a.queue.flush();
+
+      expect((await rowOf()).phone).toBe('628111');
+    });
+  });
+
   describe('a stop record', () => {
     /** The session runs; the database refuses the stop its force-kill records, and the kill goes on. */
     async function keptKill(options: { nodeId?: string } = {}) {
@@ -648,9 +735,9 @@ describe('Session row writes the database refused, kept until it answers (SQLite
       expect((await rowOf()).desiredState).toBeNull();
     });
 
-    it('of a force-kill lands after the kill handed the claim back', async () => {
+    it('of a force-kill keeps the claim it was written under until it lands', async () => {
       const node = await keptKill({ nodeId: 'node-a' });
-      expect((await rowOf()).nodeId).toBeNull();
+      expect((await rowOf()).nodeId).toBe('node-a');
 
       await node.queue.flush();
 

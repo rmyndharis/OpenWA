@@ -294,7 +294,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * the reset and auto-start read what it writes.
    */
   async onModuleInit(): Promise<void> {
-    await this.engineLifecycle.rows.landRestored();
+    await this.engineLifecycle.rows?.landRestored();
     const claimable = this.ownership?.claimableWhere() ?? [{}];
     const result = await this.sessionRepository.update(
       claimable.map(clause => ({ ...clause, status: In(ACTIVE_STATUSES) })),
@@ -523,7 +523,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // after this one (webhook drain, queue worker close, usage flush, plugin onDisable), and the claims
     // lapse with their lease anyway.
     try {
-      await this.ownership?.releaseAll(this.startReservations.keys());
+      // The claims of rows with a write still kept stay too: the next start of this node lands it under them.
+      await this.ownership?.releaseAll([
+        ...this.startReservations.keys(),
+        ...(this.engineLifecycle.rows?.keptSessions() ?? []),
+      ]);
     } catch (error) {
       this.logger.warn('Could not release the session claims at shutdown; they lapse with their lease', {
         action: 'session_claim_release_failed',
@@ -918,7 +922,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     const record = async (sessions: Repository<Session>): Promise<void> => {
       const { affected } = await sessions.update({ id, desiredState: IsNull() }, { desiredState: 'deleting' });
       // A record an earlier delete left, whose refused clear is kept, is this delete's to clear.
-      if (affected === 1 || this.engineLifecycle.rows.takeClear(id)) stops.recorded = true;
+      if (affected === 1 || this.engineLifecycle.rows?.takeClear(id) === true) stops.recorded = true;
       await sessions.update({ id, desiredState: 'stopped' }, { desiredState: 'deleting-stopped' });
     };
     if (!this.ownership) return record(this.sessionRepository);
@@ -969,7 +973,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       const moves: SessionRowWrite['moves'] = [['deleting-stopped', 'stopped']];
       if (clear) moves.unshift(['deleting', null]);
       const rows = this.engineLifecycle.rows;
-      rows.keep(id, { field: 'desiredState', moves, owners: rows.owners(true) }, error);
+      rows?.keep(id, { field: 'desiredState', moves, owners: rows.owners() }, error);
       this.logger.warn(`Could not clear the stop a failed delete recorded for session ${id}`, {
         sessionId: id,
         action: 'session_delete_stop_clear_failed',
@@ -1229,21 +1233,21 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         if (retryError instanceof ServerShuttingDownException) {
           const claimable = this.ownership?.claimableWhere() ?? [{}];
           const rows = this.engineLifecycle.rows;
-          const superseded = rows.kept(id, 'status');
+          const superseded = rows?.kept(id, 'status');
           try {
             const { affected } = await this.sessionRepository.update(
               claimable.map(clause => ({ ...clause, id, status: SessionStatus.FAILED })),
               { status: SessionStatus.DISCONNECTED },
             );
-            if (affected) rows.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
+            if (affected) rows?.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
           } catch (error) {
             // Kept for the next boot, which lands it before its reset.
-            rows.keep(
+            rows?.keep(
               id,
               {
                 field: 'status',
                 moves: [[SessionStatus.FAILED, SessionStatus.DISCONNECTED]],
-                owners: this.ownership ? 'claimable' : undefined,
+                owners: rows.owners(),
               },
               error,
             );
@@ -1453,7 +1457,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     if (!explicit || !stoppedMeanwhile || this.engineLifecycle.isEngineActive(id)) return;
     await this.keepDown(id).catch((error: unknown) => {
       const rows = this.engineLifecycle.rows;
-      rows.keep(id, { field: 'desiredState', moves: STOP_MOVES, owners: rows.owners(true) }, error);
+      rows?.keep(id, { field: 'desiredState', moves: STOP_MOVES, owners: rows.owners() }, error);
       this.logger.error(
         'Failed to record a stop that landed during a start',
         error instanceof Error ? error.message : String(error),
@@ -1579,19 +1583,19 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    */
   private async disconnectReleasedRow(id: string): Promise<void> {
     const rows = this.engineLifecycle.rows;
-    const superseded = rows.kept(id, 'status');
+    const superseded = rows?.kept(id, 'status');
     try {
       const { affected } = await this.sessionRepository.update(
         { id, nodeId: IsNull(), status: In(ACTIVE_STATUSES) },
         { status: SessionStatus.DISCONNECTED },
       );
       if (affected) {
-        rows.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
+        rows?.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
         this.engineLifecycle.announceStatus(id, SessionStatus.DISCONNECTED);
       }
     } catch (error) {
       const moves = ACTIVE_STATUSES.map((status): [string, string] => [status, SessionStatus.DISCONNECTED]);
-      rows.keep(id, { field: 'status', moves, owners: [null] }, error);
+      rows?.keep(id, { field: 'status', moves, owners: [null] }, error);
       this.logger.warn(`Could not mark session ${id} disconnected after its start left no engine`, {
         sessionId: id,
         action: 'session_release_status_failed',
@@ -1608,6 +1612,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    */
   private async releaseClaimBestEffort(id: string, ownsClaim?: () => boolean): Promise<void> {
     if (!this.ownership) return;
+    // What is kept of the row lands only under this claim: the claim stays, to lapse with its lease, while it cannot.
+    const rows = this.engineLifecycle.rows;
+    if (rows && !(await rows.landKept(id))) {
+      this.logger.warn(`Keeping the claim of session ${id}: a write of its row is kept until the database answers`, {
+        sessionId: id,
+        action: 'session_claim_release_failed',
+        error: 'a kept row write could not be written yet',
+      });
+      return;
+    }
     try {
       if (ownsClaim) await this.ownership.release(id, ownsClaim);
       else await this.ownership.release(id);

@@ -747,7 +747,7 @@ export class SessionEngineControls {
       }
     } catch (error) {
       this.host.rows?.keepSet(id, 'status', SessionStatus.DISCONNECTED, error, {
-        owners: this.host.rows?.owners(true),
+        owners: this.host.rows?.owners(),
       });
       this.logger.warn('Failed to persist the disconnected status of a retired launch', {
         sessionId: id,
@@ -942,7 +942,7 @@ export class SessionEngineControls {
           if (landed) this.host.rows?.landed(id, 'phone', null, superseded);
           return result;
         } catch (error) {
-          this.host.rows?.keepSet(id, 'phone', null, error, { owners: this.host.rows?.owners(true) });
+          this.host.rows?.keepSet(id, 'phone', null, error, { owners: this.host.rows?.owners() });
           throw error;
         }
       };
@@ -1020,7 +1020,7 @@ export class SessionEngineControls {
     const write = (): Promise<unknown> =>
       hooks.recordStop ? hooks.recordStop() : this.sessionRepository.update(id, { desiredState: 'stopped' });
     await write().catch((error: unknown) => {
-      const stop = { field: 'desiredState' as const, moves: STOP_MOVES, owners: this.host.rows?.owners(true) };
+      const stop = { field: 'desiredState' as const, moves: STOP_MOVES, owners: this.host.rows?.owners() };
       this.host.rows?.keep(id, stop, error);
       this.logger.error(
         'Failed to record the force-kill as a stop',

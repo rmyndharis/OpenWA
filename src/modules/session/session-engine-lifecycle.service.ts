@@ -1006,7 +1006,7 @@ export class SessionEngineLifecycle {
           try {
             ({ affected } = await this.sessionRepository.update(ours, { status: SessionStatus.DISCONNECTED }));
           } catch (error) {
-            this.rows.keepSet(id, 'status', SessionStatus.DISCONNECTED, error, { owners: this.rows.owners(true) });
+            this.rows.keepSet(id, 'status', SessionStatus.DISCONNECTED, error, { owners: this.rows.owners() });
             throw error;
           }
           if (affected !== 0) this.rows.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
@@ -1600,7 +1600,7 @@ export class SessionEngineLifecycle {
             }
           },
           (error: unknown) => {
-            this.rows.keepSet(id, 'phone', null, error, { owners: this.rows.owners(ownRowsOnly) });
+            this.rows.keepSet(id, 'phone', null, error, { owners: this.rows.owners() });
             throw error;
           },
         );

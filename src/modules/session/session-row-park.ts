@@ -18,14 +18,14 @@ const FIELDS: readonly unknown[] = ['status', 'phone', 'desiredState'];
  * A write of one column of a session row: each move sets the column to its second value where the row still holds
  * its first (null matches NULL), so a row a later write reached keeps that write. `blind` marks a write that set the
  * column whatever it held, guarded on the value this process knew it held. `with` are the columns written alongside
- * it, `owners` the claims the row may carry as the write was fenced (absent: any).
+ * it, `owners` the node the row must name (null: none) as the write was fenced (absent: any).
  */
 export interface SessionRowWrite {
   field: SessionRowField;
   moves: Array<[string | null, string | null]>;
   blind?: boolean;
   with?: { connectedAt?: string; lastActiveAt?: string; pushName?: string };
-  owners?: Array<string | null> | 'claimable';
+  owners?: Array<string | null>;
 }
 
 /** The record of a stop (a stop, a force-kill): a row a running delete holds keeps both. */
@@ -80,6 +80,8 @@ export class KeptRowWrite implements RecoveryRecord {
     readonly write: SessionRowWrite,
     readonly since: number,
     private readonly rows: SessionRows,
+    /** Whether the claim of this node the write was fenced on still stands (absent: none was, or restored). */
+    readonly claim?: () => boolean,
   ) {
     this.size = JSON.stringify(write).length;
   }
@@ -100,6 +102,10 @@ export class KeptRowWrite implements RecoveryRecord {
   lost(reason: RecoveryLoss): void {
     this.rows.released(this, reason);
   }
+
+  dropped(): void {
+    this.rows.released(this);
+  }
 }
 
 /** A kept session row write as the journal keeps it. */
@@ -116,7 +122,7 @@ interface JournaledRowWrite {
 export interface SessionRowsDeps {
   repository: Repository<Session>;
   queue?: RecoveryQueue;
-  ownership?: Pick<SessionOwnershipService, 'nodeId' | 'claimableWhere'>;
+  ownership?: Pick<SessionOwnershipService, 'nodeId' | 'captureClaim'>;
   logger: ReturnType<typeof createLogger>;
   /** A status a write kept by this process landed: announced as a live write announces it. */
   announce(sessionId: string, status: SessionStatus): void;
@@ -126,15 +132,19 @@ export interface SessionRowsDeps {
  * The session row writes the database refused (a status, the number a READY links or an unlink or a logout clears,
  * an operator's stop record), kept in the recovery queue's `session` lane and its journal until it answers. One is
  * kept per session and column, a newer refused write composed over the older. A kept write lands only where no later
- * write reached the row: its moves name the values it replaces, and it lands only on a row the node that wrote it
- * still holds, or that no node holds, so a later write by this process or by another node wins. A blind write is guarded on the value this process last wrote or
- * read for the column, and is not kept while it knows none. What the last process kept lands at boot, before the
- * reset and auto-start read the rows.
+ * write reached the row: its moves name the values it replaces, and a write fenced on this node's claim lands only
+ * while that very claim stands and the row names this node. Another node writes the row only once it holds a claim
+ * of its own, so its writes are never under ours, and this node lands what it keeps of a session before it hands the
+ * claim back (keeping the claim, to lapse with its lease, while something could not land). A blind write is guarded
+ * on the value this process last wrote or read for the column, and is not kept while it knows none. What the last
+ * process kept lands at boot, before the reset and auto-start read the rows.
  */
 export class SessionRows {
   // Per session, what this process last wrote to or read from the row, and how many of its writes landed: a read
   // counts only when none landed while it ran.
   private readonly known = new Map<string, { status?: SessionStatus; phone?: string | null; writes: number }>();
+  // The keys of the writes kept per session that have not landed, journaled ones a shutdown pass left included.
+  private readonly pending = new Map<string, Set<string>>();
 
   constructor(private readonly deps: SessionRowsDeps) {
     deps.queue?.register('session', {
@@ -146,10 +156,10 @@ export class SessionRows {
     });
   }
 
-  /** The claims a write fenced on this node's claim may find: this node's, and with `free` a row no node holds. */
-  owners(free = false): Array<string | null> | undefined {
+  /** The fence of a write under this node's claim. */
+  owners(): Array<string | null> | undefined {
     const node = this.deps.ownership?.nodeId;
-    return node === undefined ? undefined : free ? [node, null] : [node];
+    return node === undefined ? undefined : [node];
   }
 
   /** The write of `field` kept now: a live write issued now settles it once it lands. */
@@ -184,15 +194,24 @@ export class SessionRows {
   keep(sessionId: string, write: SessionRowWrite, error: unknown): boolean {
     const queue = this.deps.queue;
     if (!queue || !isDatabaseUnavailable(error)) return false;
+    // A write fenced on this node is kept under the claim it was written in, and not at all once that claim is gone.
+    const node = this.deps.ownership?.nodeId;
+    const claim =
+      node !== undefined && write.owners?.includes(node) ? this.deps.ownership!.captureClaim(sessionId) : undefined;
+    if (claim && !claim()) return false;
     const key = keyOf(sessionId, write.field);
     const kept = queue.get('session', key) as KeptRowWrite | undefined;
+    // One kept under a claim that ended since is moot: the writes of the claim after it are newer.
+    const prior = kept && (!kept.claim || kept.claim()) ? kept : undefined;
     this.deps.logger.warn('Keeping a session row write the database refused, to write it once it answers', {
       sessionId,
       field: write.field,
       error: error instanceof Error ? error.message : String(error),
       action: 'session_row_write_kept',
     });
-    queue.park(key, new KeptRowWrite(key, sessionId, kept ? compose(kept.write, write) : write, Date.now(), this));
+    const composed = prior ? compose(prior.write, write) : write;
+    queue.park(key, new KeptRowWrite(key, sessionId, composed, Date.now(), this, claim));
+    this.note(sessionId, key);
     return true;
   }
 
@@ -233,13 +252,39 @@ export class SessionRows {
     if (kept?.write.with?.pushName === undefined) return;
     this.deps.queue?.park(
       kept.key,
-      new KeptRowWrite(kept.key, sessionId, { ...kept.write, with: undefined }, kept.since, this),
+      new KeptRowWrite(kept.key, sessionId, { ...kept.write, with: undefined }, kept.since, this, kept.claim),
     );
   }
 
   /** Drop what this process knew of a deleted session's row. */
   forget(sessionId: string): void {
     this.known.delete(sessionId);
+  }
+
+  /**
+   * Land what is kept of a session now, before this node hands its claim back: the writes kept under that claim land
+   * only while it stands. Answers whether nothing is left; while something is, the claim is not handed back.
+   */
+  async landKept(sessionId: string): Promise<boolean> {
+    const queue = this.deps.queue;
+    if (!queue) return true;
+    const kept = (): Array<RecoveryRecord & { key: string }> =>
+      [...queue.records('session')].filter(record => record.sessionId === sessionId) as Array<
+        RecoveryRecord & { key: string }
+      >;
+    for (const record of kept()) {
+      try {
+        if (await record.retry()) queue.settle('session', record.key);
+      } catch {
+        return false;
+      }
+    }
+    return kept().length === 0;
+  }
+
+  /** The sessions with a write kept that has not landed, one a shutdown pass left in the journal included. */
+  keptSessions(): string[] {
+    return [...this.pending.keys()];
   }
 
   /** What the journal restored lands now, before the boot reset and auto-start read the rows; a refused one waits. */
@@ -258,14 +303,9 @@ export class SessionRows {
   /** One try of a kept write: true once it landed or a later write made it moot, and throws while the database refuses it. */
   async apply(record: KeptRowWrite): Promise<boolean> {
     const { sessionId, write } = record;
-    // A row no node holds is taken too (the writer may have released it since): no peer's write is on it, and the
-    // value compare still stops one made before the release.
-    const owners: FindOptionsWhere<Session>[] =
-      write.owners === 'claimable'
-        ? (this.deps.ownership?.claimableWhere() ?? [{}])
-        : write.owners
-          ? [...new Set([...write.owners, null])].map(nodeId => ({ nodeId: nodeId ?? IsNull() }))
-          : [{}];
+    // The claim it was written under ended: whatever was written since is newer.
+    if (record.claim && !record.claim()) return true;
+    const owners: FindOptionsWhere<Session>[] = write.owners?.map(nodeId => ({ nodeId: nodeId ?? IsNull() })) ?? [{}];
     const { connectedAt, lastActiveAt, pushName } = write.with ?? {};
     const columns: QueryDeepPartialEntity<Session> = {
       ...(connectedAt !== undefined && { connectedAt: new Date(connectedAt) }),
@@ -285,9 +325,20 @@ export class SessionRows {
     return true;
   }
 
-  released(record: KeptRowWrite, reason: RecoveryLoss): void {
+  /** The record left the queue: landed, made moot or forgotten, or given up on (`reason`), which is logged. */
+  released(record: KeptRowWrite, reason?: RecoveryLoss): void {
+    const keys = this.pending.get(record.sessionId);
+    keys?.delete(record.key);
+    if (keys?.size === 0) this.pending.delete(record.sessionId);
+    if (!reason) return;
     const { message, action } = LOSS[record.write.field];
     this.deps.logger.error(message, undefined, { sessionId: record.sessionId, reason, action });
+  }
+
+  private note(sessionId: string, key: string): void {
+    const keys = this.pending.get(sessionId) ?? new Set<string>();
+    keys.add(key);
+    this.pending.set(sessionId, keys);
   }
 
   private remember(sessionId: string, field: 'status' | 'phone', value: string | null): void {
@@ -310,6 +361,7 @@ export class SessionRows {
     const write: SessionRowWrite = { field: v.f!, moves: landing, blind: v.b, with: v.w, owners: v.n };
     const record = new KeptRowWrite(key, v.s, write, v.t, this);
     record.restored = true;
+    this.note(v.s, key);
     return record;
   }
 }
