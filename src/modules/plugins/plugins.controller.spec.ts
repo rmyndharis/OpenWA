@@ -7,7 +7,7 @@ import type { App } from 'supertest/types';
 import { PluginsController } from './plugins.controller';
 import { PluginsService } from './plugins.service';
 import { AuditService } from '../audit/audit.service';
-import { REQUIRED_ROLE_KEY, UNSCOPED_KEY } from '../auth/decorators/auth.decorators';
+import { REQUIRED_ROLE_KEY, UNRESTRICTED_KEY } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
 describe('PluginsController authorization', () => {
@@ -53,7 +53,7 @@ describe('PluginsController authorization', () => {
   it('updateSessions requires an unrestricted key because updateSessions replaces the complete active set', () => {
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const handler = PluginsController.prototype.updateSessions;
-    expect(reflector.get<boolean>(UNSCOPED_KEY, handler)).toBe(true);
+    expect(reflector.get<boolean>(UNRESTRICTED_KEY, handler)).toBe(true);
   });
 });
 

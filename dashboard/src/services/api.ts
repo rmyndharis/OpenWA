@@ -206,6 +206,59 @@ export interface TemplatePayload {
   footer?: string | null;
 }
 
+/** The capability vocabulary a key may be BLOCKED from; an empty list blocks nothing. */
+export const API_KEY_CAPABILITIES = [
+  'messages:read',
+  'messages:send',
+  'messages:edit',
+  'messages:delete',
+  'messages:moderate',
+  'chats:read',
+  'chats:manage',
+  'contacts:read',
+  'contacts:write',
+  'groups:read',
+  'groups:manage',
+  'groups:invite',
+  'sessions:read',
+  'sessions:create',
+  'sessions:lifecycle',
+  'sessions:pair',
+  'sessions:config',
+  'sessions:proxy',
+  'labels:read',
+  'labels:write',
+  'profile:write',
+  'catalog:read',
+  'catalog:send',
+  'templates:read',
+  'templates:write',
+  'webhooks:read',
+  'webhooks:write',
+  'automation:read',
+  'automation:write',
+  'channels:read',
+  'channels:write',
+  'status:read',
+  'status:send',
+  'status:delete',
+  'media:convert',
+  'calls:manage',
+  'search:read',
+  'events:read',
+  'audit:read',
+  'stats:read',
+  'settings:read',
+  'infra:read',
+  'infra:write',
+  'plugins:read',
+  'plugins:write',
+  'integrations:manage',
+  'apikeys:manage',
+] as const;
+
+export type ApiKeyCapability = (typeof API_KEY_CAPABILITIES)[number];
+
 export interface ApiKey {
   id: string;
   name: string;
@@ -214,6 +267,7 @@ export interface ApiKey {
   allowedIps?: string[];
   allowedSessions?: string[];
   allowedChats?: string[];
+  deniedPermissions?: ApiKeyCapability[];
   isActive: boolean;
   expiresAt?: string;
   lastUsedAt?: string;
@@ -1301,6 +1355,7 @@ export const apiKeyApi = {
     allowedSessions?: string[];
     expiresAt?: string;
     allowedChats?: string[];
+    deniedPermissions?: ApiKeyCapability[];
   }) =>
     request<CreatedApiKey>('/auth/api-keys', {
       method: 'POST',
@@ -1316,6 +1371,7 @@ export const apiKeyApi = {
       /** null removes the expiry. */
       expiresAt?: string | null;
       allowedChats?: string[];
+      deniedPermissions?: ApiKeyCapability[];
     },
   ) =>
     request<ApiKey>(`/auth/api-keys/${enc(id)}`, {

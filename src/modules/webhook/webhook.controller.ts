@@ -1,9 +1,21 @@
 import { isDeepStrictEqual } from 'node:util';
-import { Controller, Get, Post, Put, Delete, Param, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Param,
+  Body,
+  HttpCode,
+  HttpStatus,
+  ForbiddenException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { WebhookService } from './webhook.service';
-import { CreateWebhookDto, UpdateWebhookDto, WebhookResponseDto, WebhookTestResponseDto } from './dto';
-import { CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { CreateWebhookDto, UpdateWebhookDto, WebhookResponseDto, WebhookTestResponseDto, WEBHOOK_EVENTS } from './dto';
+import { Capability, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability, eventCapabilities, isCapabilityDenied } from '../auth/api-key-permissions';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -37,6 +49,18 @@ export class WebhookController {
     private readonly audit: AuditService,
   ) {}
 
+  /** A webhook is a standing event subscription, so its events inherit the same capability fence as /events. */
+  private assertEventsAllowed(apiKey: ApiKey | undefined, events: readonly string[]): void {
+    if (!apiKey) return;
+    const expanded = events.includes('*') ? WEBHOOK_EVENTS : events;
+    for (const event of expanded) {
+      const blocked = eventCapabilities(event).find(capability => isCapabilityDenied(apiKey, capability));
+      if (blocked) {
+        throw new ForbiddenException(`API key is blocked from webhook event ${event} (${blocked})`);
+      }
+    }
+  }
+
   /**
    * One audit row per successful webhook change: a webhook streams every event of its session to a URL the operator
    * chose, so which key added, re-pointed or removed one is where an investigation of a leak starts. A failed write
@@ -51,6 +75,7 @@ export class WebhookController {
     void this.audit.logInfo(action, { apiKey, sessionId, metadata });
   }
 
+  @Capability(ApiKeyCapability.WEBHOOKS_WRITE, ApiKeyCapability.MESSAGES_READ)
   @Post()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Create a webhook for the session' })
@@ -71,11 +96,13 @@ export class WebhookController {
     @Body() dto: CreateWebhookDto,
     @CurrentApiKey() apiKey?: ApiKey,
   ): Promise<WebhookResponseDto> {
+    this.assertEventsAllowed(apiKey, dto.events ?? ['message.received']);
     const webhook = await this.webhookService.create(sessionId, dto);
     this.record(AuditAction.WEBHOOK_CREATED, sessionId, apiKey, describeWebhook(webhook));
     return WebhookResponseDto.fromEntity(webhook);
   }
 
+  @Capability(ApiKeyCapability.WEBHOOKS_READ)
   @Get()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'List all webhooks for a session' })
@@ -89,6 +116,7 @@ export class WebhookController {
     return WebhookResponseDto.fromEntities(await this.webhookService.findBySession(sessionId));
   }
 
+  @Capability(ApiKeyCapability.WEBHOOKS_READ)
   @Get(':id')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Get a webhook by ID' })
@@ -104,6 +132,7 @@ export class WebhookController {
     return WebhookResponseDto.fromEntity(await this.webhookService.findOne(sessionId, id));
   }
 
+  @Capability(ApiKeyCapability.WEBHOOKS_WRITE, ApiKeyCapability.MESSAGES_READ)
   @Put(':id')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Update a webhook' })
@@ -128,6 +157,7 @@ export class WebhookController {
     // Read first: a client re-sends every field on each edit and the service skips an unchanged URL, so only a field
     // that differs afterwards is a change.
     const before = await this.webhookService.findOne(sessionId, id);
+    this.assertEventsAllowed(apiKey, dto.events ?? before.events);
     const after = await this.webhookService.update(sessionId, id, dto);
     const changed = UPDATABLE_FIELDS.filter(field => !isDeepStrictEqual(before[field], after[field]));
     if (changed.length > 0) {
@@ -140,6 +170,7 @@ export class WebhookController {
     return WebhookResponseDto.fromEntity(after);
   }
 
+  @Capability(ApiKeyCapability.WEBHOOKS_WRITE)
   @Post(':id/test')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -155,6 +186,7 @@ export class WebhookController {
     return this.webhookService.test(sessionId, id);
   }
 
+  @Capability(ApiKeyCapability.WEBHOOKS_WRITE)
   @Delete(':id')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.NO_CONTENT)

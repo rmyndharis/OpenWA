@@ -300,6 +300,7 @@ erDiagram
         simple_array allowedIps
         simple_array allowedSessions
         simple_array allowedChats
+        simple_array deniedPermissions
         boolean isActive
         timestamp expiresAt
         timestamp lastUsedAt
@@ -630,6 +631,7 @@ CREATE TABLE api_keys (
     "allowedIps" TEXT,                             -- simple-array (comma-joined), null = any IP
     "allowedSessions" TEXT,                        -- simple-array, null = all sessions
     "allowedChats" TEXT,                           -- simple-array, null = all chats
+    "deniedPermissions" TEXT,                      -- simple-array, null = nothing blocked
     "isActive" BOOLEAN NOT NULL DEFAULT 1,
     "expiresAt" DATETIME,
     "lastUsedAt" DATETIME,
@@ -642,7 +644,7 @@ CREATE UNIQUE INDEX "IDX_api_keys_keyHash" ON api_keys("keyHash");
 ```
 
 > [!NOTE]
-> Access control is **role-based** (`admin` / `operator` / `viewer`), optionally scoped by `allowedIps`, `allowedSessions` and `allowedChats`. There is no granular `permissions` string array — see [04 - Security Design](./04-security-design.md) for what each role can do.
+> Access control is **role-based** (`admin` / `operator` / `viewer`), optionally scoped by `allowedIps`, `allowedSessions` and `allowedChats`, and optionally limited by a capability blocklist in `deniedPermissions` (47 capabilities across messages, chats, contacts, groups, sessions, labels, profile, catalog, templates, webhooks, automation, channels, status, media, calls, search, events, audit, stats, settings, infrastructure, plugins, integrations and key management). An empty/absent `deniedPermissions` blocks nothing, so the role and scopes alone decide access — see [04 - Security Design](./04-security-design.md) for the full matrix.
 
 ---
 
@@ -984,7 +986,8 @@ src/database/migrations-main/      # main connection (auth + audit, SQLite)
 ├── 1779900000000-CreateAuthAuditTables.ts   # creates api_keys + audit_logs
 ├── 1786600000000-AddApiKeyAllowedChats.ts   # adds api_keys.allowedChats
 ├── 1786610000000-DropSynchronizeIndexDuplicates.ts  # drops synchronize-named duplicate indexes
-└── 1792000000000-CreateBrowserSessions.ts   # creates browser_sessions (HttpOnly dashboard cookie store)
+├── 1792000000000-CreateBrowserSessions.ts   # creates browser_sessions (HttpOnly dashboard cookie store)
+└── 1794000000000-AddApiKeyDeniedPermissions.ts  # adds api_keys.deniedPermissions (capability blocklist)
 
 src/database/migrations/           # data connection (pluggable)
 ├── 1770108659848-AddMessageStatus.ts

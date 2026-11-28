@@ -3,7 +3,8 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { MessageStatsResponseDto, OverviewStatsResponseDto, SessionStatsResponseDto } from './dto/stats-response.dto';
 import { StatsService } from './stats.service';
 import { StatsQueryDto } from './dto/stats-query.dto';
-import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
 @ApiTags('statistics')
@@ -14,6 +15,7 @@ export class StatsController {
   // Global, cross-session aggregates with no scope param. The ADMIN role gate alone does not keep a
   // session-restricted key out — role and session scope are independent — so these also require an
   // unrestricted key. (Per-session stats below stays scope-gated by its :sessionId route param.)
+  @Capability(ApiKeyCapability.STATS_READ)
   @Get('overview')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -27,6 +29,7 @@ export class StatsController {
     return this.statsService.getOverview();
   }
 
+  @Capability(ApiKeyCapability.STATS_READ)
   @Get('messages')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -44,6 +47,7 @@ export class StatsController {
     return this.statsService.getMessageStats(query.period || '24h');
   }
 
+  @Capability(ApiKeyCapability.STATS_READ)
   @Get('sessions/:sessionId')
   @ApiOperation({ summary: 'Get statistics for a specific session' })
   @ApiResponse({

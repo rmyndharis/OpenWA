@@ -10,6 +10,7 @@ import { KeyRateLimiter, readIpRateLimitConfig } from '../../modules/mcp/mcp-rat
 import { limiterKeyForIp, resolveClientIp } from '../utils/ip';
 import { presentedApiKey } from './bearer-token';
 import { setRequestActor } from '../services/request-context';
+import { hasBlockedCapabilities } from '../../modules/auth/api-key-permissions';
 
 /**
  * Protects the Bull Board UI (/admin/queues).
@@ -101,6 +102,13 @@ export class BullBoardAuthMiddleware implements NestMiddleware {
       // scope against and must refuse such a key outright.
       if ((apiKey.allowedChats?.length ?? 0) > 0) {
         throw new ForbiddenException('API keys restricted to selected chats cannot access the queue dashboard');
+      }
+
+      // Bull Board is not split into capability-classified Nest handlers: it exposes deployment-wide
+      // queue payloads and mutation controls behind one raw Express mount. A partial blocklist cannot
+      // be enforced safely here, so refuse it exactly like the MCP mount and the two scope fences.
+      if (hasBlockedCapabilities(apiKey)) {
+        throw new ForbiddenException('Capability-restricted API keys cannot access the queue dashboard');
       }
 
       // Boundary trace of queue-mutation attempts. GET/HEAD are the UI's read/poll traffic; every

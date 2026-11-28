@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { lazyWithRetry as lazy } from './utils/lazyWithRetry';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Layout } from './components/Layout';
 import { ToastProvider } from './components/Toast';
 import { NumberCheckProvider } from './components/NumberCheckProvider';
@@ -21,6 +22,7 @@ import {
   resolveStartupValidation,
   subscribeAuthEvents,
 } from './utils/authLifecycle';
+import { canAccessDashboardPage, type DashboardPagePath } from './utils/dashboardAccess';
 import './App.css';
 
 const Login = lazy(() => import('./pages/Login').then(m => ({ default: m.Login })));
@@ -47,6 +49,7 @@ const queryClient = new QueryClient({
 });
 
 function AppContent() {
+  const { t } = useTranslation();
   // Clear any legacy plaintext API key left in sessionStorage by older builds, and read the
   // non-secret session actor id once at mount so we know whether to render optimistically while
   // GET /auth/session hydrates live state from the HttpOnly browser session cookie.
@@ -57,26 +60,38 @@ function AppContent() {
   const [isAuthenticated, setIsAuthenticated] = useState(hadSavedSession);
   const [hydratingSession, setHydratingSession] = useState(!hadSavedSession);
   const authGenRef = useRef(0);
-  const { setRole, role, setEngineType, setScoped, scoped, setApiKeyId, apiKeyId, bumpSessionEpoch } = useRole();
-  const actorRef = useRef({ apiKeyId, role, scoped });
+  const {
+    setRole,
+    role,
+    setEngineType,
+    setScoped,
+    scoped,
+    setApiKeyId,
+    apiKeyId,
+    bumpSessionEpoch,
+    deniedPermissions = [],
+    setDeniedPermissions,
+  } = useRole();
+  const actorRef = useRef({ apiKeyId, role, scoped, deniedPermissions: [...deniedPermissions] });
   useEffect(() => {
-    actorRef.current = { apiKeyId, role, scoped };
-  }, [apiKeyId, role, scoped]);
+    actorRef.current = { apiKeyId, role, scoped, deniedPermissions: [...deniedPermissions] };
+  }, [apiKeyId, role, scoped, deniedPermissions]);
 
   const clearLocalSession = useCallback(() => {
-    actorRef.current = { apiKeyId: null, role: null, scoped: false };
+    actorRef.current = { apiKeyId: null, role: null, scoped: false, deniedPermissions: [] };
     setIsAuthenticated(false);
     setHydratingSession(false);
     setRole(null);
     setEngineType(null);
     setScoped(false);
     setApiKeyId?.(null);
+    setDeniedPermissions?.([]);
     clearSessionMetadata();
     // Wipe the React Query cache too: it is keyed by resource, not actor, so without a full
     // clear a logout -> login in the same tab with a different key/scope shows the previous
     // actor's sessions/messages/apiKeys/audit rows.
     clearActorState(queryClient);
-  }, [setRole, setEngineType, setScoped, setApiKeyId]);
+  }, [setRole, setEngineType, setScoped, setApiKeyId, setDeniedPermissions]);
 
   const handleLogin = useCallback(
     (session: LoginSessionResult) => {
@@ -85,7 +100,13 @@ function AppContent() {
       const effectiveApiKeyId = session.apiKeyId ?? 'session';
       const nextRole = isUserRole(session.role) ? session.role : 'viewer';
       const nextScoped = session.scoped === true;
-      actorRef.current = { apiKeyId: effectiveApiKeyId, role: nextRole, scoped: nextScoped };
+      const nextDeniedPermissions = session.deniedPermissions ?? [];
+      actorRef.current = {
+        apiKeyId: effectiveApiKeyId,
+        role: nextRole,
+        scoped: nextScoped,
+        deniedPermissions: nextDeniedPermissions,
+      };
       // The login page's POST /auth/session response already carried the role, scope, engine, and
       // apiKeyId, so no second round-trip is needed. An absent or unrecognized role falls back to
       // viewer, the least-privileged default.
@@ -93,11 +114,12 @@ function AppContent() {
       setEngineType(session.engineType ?? null);
       setScoped(nextScoped);
       setApiKeyId?.(effectiveApiKeyId);
+      setDeniedPermissions?.(nextDeniedPermissions);
       setHydratingSession(false);
       setIsAuthenticated(true);
       broadcastAuthEvent({ type: 'login', apiKeyId: effectiveApiKeyId });
     },
-    [setRole, setEngineType, setScoped, setApiKeyId],
+    [setRole, setEngineType, setScoped, setApiKeyId, setDeniedPermissions],
   );
 
   const handleLogout = useCallback(() => {
@@ -126,18 +148,26 @@ function AppContent() {
           } else if (decision.action === 'role') {
             const prevActor = actorRef.current;
             const nextApiKeyId = decision.apiKeyId ?? getActiveApiKeyId() ?? 'session';
+            const nextDeniedPermissions = decision.deniedPermissions ?? [];
             const hadPriorActor = prevActor.apiKeyId !== null || prevActor.role !== null;
             const actorChanged =
               hadPriorActor &&
               ((prevActor.apiKeyId !== null && prevActor.apiKeyId !== nextApiKeyId) ||
                 (prevActor.role !== null && prevActor.role !== decision.role) ||
-                prevActor.scoped !== decision.scoped);
+                prevActor.scoped !== decision.scoped ||
+                JSON.stringify(prevActor.deniedPermissions) !== JSON.stringify(nextDeniedPermissions));
             if (actorChanged) {
               clearActorState(queryClient);
             }
-            actorRef.current = { apiKeyId: nextApiKeyId, role: decision.role, scoped: decision.scoped };
+            actorRef.current = {
+              apiKeyId: nextApiKeyId,
+              role: decision.role,
+              scoped: decision.scoped,
+              deniedPermissions: nextDeniedPermissions,
+            };
             setRole(decision.role);
             setScoped(decision.scoped);
+            setDeniedPermissions?.(nextDeniedPermissions);
             if (decision.engineType) setEngineType(decision.engineType);
             if (decision.apiKeyId) setApiKeyId?.(decision.apiKeyId);
             else if (!getActiveApiKeyId()) setApiKeyId?.('session');
@@ -155,7 +185,7 @@ function AppContent() {
           setHydratingSession(false);
         });
     },
-    [setRole, setEngineType, setScoped, setApiKeyId, bumpSessionEpoch, clearLocalSession],
+    [setRole, setEngineType, setScoped, setApiKeyId, setDeniedPermissions, bumpSessionEpoch, clearLocalSession],
   );
 
   // Hydrate and refresh the active browser session once at mount (covers both page reload and a
@@ -200,6 +230,31 @@ function AppContent() {
     );
   }
 
+  const canAccessPage = (path: DashboardPagePath) => canAccessDashboardPage(path, deniedPermissions);
+  const candidateLandingPages: Array<{ path: DashboardPagePath; adminOnly?: boolean; unscopedOnly?: boolean }> = [
+    { path: '/' },
+    { path: '/sessions' },
+    { path: '/chats' },
+    { path: '/number-checker' },
+    { path: '/webhooks' },
+    { path: '/templates' },
+    { path: '/api-keys', adminOnly: true, unscopedOnly: true },
+    { path: '/message-tester' },
+    { path: '/infrastructure', adminOnly: true, unscopedOnly: true },
+    { path: '/plugins', adminOnly: true, unscopedOnly: true },
+    { path: '/logs', adminOnly: true },
+  ];
+  const landingPath = candidateLandingPages.find(
+    page => (!page.adminOnly || role === 'admin') && (!page.unscopedOnly || !scoped) && canAccessPage(page.path),
+  )?.path;
+  const refusedPageFallback = landingPath ? (
+    <Navigate to={landingPath} replace />
+  ) : (
+    <div className="page-container" role="alert">
+      {t('common.noDashboardAccess')}
+    </div>
+  );
+
   return (
     <ToastProvider key={apiKeyId ?? 'session'}>
       {/* Above the routes, so a bulk Number Checker run survives leaving its page; a logout unmounts it. */}
@@ -208,18 +263,24 @@ function AppContent() {
           <Suspense fallback={loadingFallback}>
             <Routes>
               <Route path="/" element={<Layout onLogout={handleLogout} userRole={role} />}>
-                <Route index element={<Dashboard />} />
-                <Route path="sessions" element={<Sessions />} />
-                <Route path="chats" element={<Chats />} />
-                <Route path="number-checker" element={<NumberChecker />} />
-                <Route path="webhooks" element={<Webhooks />} />
-                <Route path="templates" element={<Templates />} />
-                {role === 'admin' && !scoped && <Route path="api-keys" element={<ApiKeys />} />}
-                {role === 'admin' && <Route path="logs" element={<Logs />} />}
-                <Route path="message-tester" element={<MessageTester />} />
-                {role === 'admin' && !scoped && <Route path="infrastructure" element={<Infrastructure />} />}
-                {role === 'admin' && !scoped && <Route path="plugins" element={<Plugins />} />}
-                <Route path="*" element={<Navigate to="/" replace />} />
+                <Route index element={canAccessPage('/') ? <Dashboard /> : refusedPageFallback} />
+                {canAccessPage('/sessions') && <Route path="sessions" element={<Sessions />} />}
+                {canAccessPage('/chats') && <Route path="chats" element={<Chats />} />}
+                {canAccessPage('/number-checker') && <Route path="number-checker" element={<NumberChecker />} />}
+                {canAccessPage('/webhooks') && <Route path="webhooks" element={<Webhooks />} />}
+                {canAccessPage('/templates') && <Route path="templates" element={<Templates />} />}
+                {role === 'admin' && !scoped && canAccessPage('/api-keys') && (
+                  <Route path="api-keys" element={<ApiKeys />} />
+                )}
+                {role === 'admin' && canAccessPage('/logs') && <Route path="logs" element={<Logs />} />}
+                {canAccessPage('/message-tester') && <Route path="message-tester" element={<MessageTester />} />}
+                {role === 'admin' && !scoped && canAccessPage('/infrastructure') && (
+                  <Route path="infrastructure" element={<Infrastructure />} />
+                )}
+                {role === 'admin' && !scoped && canAccessPage('/plugins') && (
+                  <Route path="plugins" element={<Plugins />} />
+                )}
+                <Route path="*" element={refusedPageFallback} />
               </Route>
             </Routes>
           </Suspense>

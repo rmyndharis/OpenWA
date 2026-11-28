@@ -16,6 +16,7 @@ import { SUBSCRIBABLE_EVENTS, buildRoomName } from './dto/ws-messages.dto';
 import type { WSClientMessage, WSErrorResponse, WSSubscribedResponse, WSEventMessage } from './dto/ws-messages.dto';
 import { WEBHOOK_RESERVED_EVENTS } from '../webhook/dto/webhook.dto';
 import { SlidingWindowLimiter } from './ws-rate-limit';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 
 describe('isSessionSubscriptionAllowed (WS session-scope enforcement)', () => {
   it('allows an unrestricted key (null allowedSessions) to subscribe to anything, including *', () => {
@@ -140,6 +141,21 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     expect(sock.data.rawApiKey).toBe('good');
   });
 
+  it('rejects the handshake when the key blocks events:read', async () => {
+    authService.validateApiKey.mockResolvedValue({
+      id: 'k1',
+      name: 'k',
+      allowedSessions: null,
+      deniedPermissions: [ApiKeyCapability.EVENTS_READ],
+    });
+    const sock = makeSocket({ apiKey: 'blocked' });
+
+    await gateway.handleConnection(asSocket(sock));
+
+    expect(sock.disconnect).toHaveBeenCalled();
+    expect(sessionRoomJoins(sock)).toEqual([]);
+  });
+
   it('accepts a chat-restricted key without granting global event rooms at the handshake', async () => {
     authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: null, allowedChats: ['123@g.us'] });
     const sock = makeSocket({ apiKey: 'good' });
@@ -147,6 +163,24 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     expect(sock.disconnect).not.toHaveBeenCalled();
     expect(sessionRoomJoins(sock)).toEqual([]);
     expect(auditService.logWarn).not.toHaveBeenCalled();
+  });
+
+  it('keeps wildcard subscriptions inside the allowlist for a chat-restricted key', async () => {
+    authService.validateApiKey.mockResolvedValue({
+      name: 'k',
+      allowedSessions: null,
+      allowedChats: ['123@g.us'],
+      deniedPermissions: [],
+    });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(asSocket(sock), subscribeMsg('sess-1', ['*']))) as WSSubscribedResponse;
+
+    expect(res.type).toBe('subscribed');
+    expect(res.events).toEqual(['*']);
+    expect(sessionRoomJoins(sock)).toEqual([`${buildRoomName('sess-1', '*')}:chat:123%40g.us`]);
+    expect(sessionRoomJoins(sock)).not.toContain(buildRoomName('sess-1', '*'));
   });
 
   it('refuses a subscribe once the key has gained allowedChats after connect', async () => {
@@ -191,6 +225,46 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
       metadata: { surface: 'websocket' },
       errorMessage: 'API key revoked',
     });
+  });
+
+  it('refuses a subscribe when events:read was blocked after the handshake', async () => {
+    authService.validateApiKey.mockResolvedValueOnce({ id: 'k1', name: 'k', allowedSessions: null });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+    authService.validateApiKey.mockResolvedValueOnce({
+      id: 'k1',
+      name: 'k',
+      allowedSessions: null,
+      deniedPermissions: [ApiKeyCapability.EVENTS_READ],
+    });
+
+    const res = (await gateway.handleMessage(
+      asSocket(sock),
+      subscribeMsg('sess-1', ['session.status']),
+    )) as WSErrorResponse;
+
+    expect(res.code).toBe('FORBIDDEN_EVENTS');
+    expect(sessionRoomJoins(sock)).toEqual([]);
+  });
+
+  it('removes message events from a wildcard when messages:read is blocked', async () => {
+    const key = {
+      id: 'k1',
+      name: 'k',
+      role: 'operator',
+      allowedSessions: null,
+      deniedPermissions: [ApiKeyCapability.MESSAGES_READ],
+    };
+    authService.validateApiKey.mockResolvedValue(key);
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(asSocket(sock), subscribeMsg('sess-1', ['*']))) as WSSubscribedResponse;
+
+    expect(res.type).toBe('subscribed');
+    expect(res.events).toContain('session.status');
+    expect(res.events).not.toContain('message.received');
+    expect(sessionRoomJoins(sock)).not.toContain(buildRoomName('sess-1', '*'));
   });
 
   it('allows subscribe when the key still re-validates', async () => {
@@ -283,6 +357,39 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     expect(res.code).toBe('INVALID_SESSION');
     expect(authService.validateApiKey).not.toHaveBeenCalled();
     expect(sessionRoomJoins(sock)).toEqual([]);
+  });
+
+  it('keeps one room per chat for a chat key that blocks nothing a chat room carries', async () => {
+    authService.validateApiKey.mockResolvedValue({
+      name: 'k',
+      allowedSessions: null,
+      allowedChats: ['123@g.us'],
+      deniedPermissions: [ApiKeyCapability.SESSIONS_PAIR],
+    });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(asSocket(sock), subscribeMsg('sess-1', ['*']))) as WSSubscribedResponse;
+
+    expect(res.events).toEqual(['*']);
+    expect(sessionRoomJoins(sock)).toEqual([`${buildRoomName('sess-1', '*')}:chat:123%40g.us`]);
+  });
+
+  it('does not suggest "*" when a blocked chat event makes the wildcard cost a room per event', async () => {
+    authService.validateApiKey.mockResolvedValue({
+      name: 'k',
+      allowedSessions: null,
+      allowedChats: Array.from({ length: 2000 }, (_, i) => `${i}@g.us`),
+      deniedPermissions: [ApiKeyCapability.MESSAGES_READ],
+    });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(asSocket(sock), subscribeMsg('sess-1', ['*']))) as WSErrorResponse;
+
+    expect(res.code).toBe('TOO_MANY_SUBSCRIPTIONS');
+    expect(res.message).toContain('name fewer events');
+    expect(res.message).not.toContain('"*"');
   });
 
   it('refuses a subscribe that would take the socket past its room cap', async () => {
@@ -820,7 +927,16 @@ describe('EventsGateway session.qr role gate', () => {
     emit: (channel: string, msg: WSEventMessage) => boolean;
   };
 
-  let keys: Record<string, { id: string; name: string; role: string; allowedSessions: string[] | null }>;
+  let keys: Record<
+    string,
+    {
+      id: string;
+      name: string;
+      role: string;
+      allowedSessions: string[] | null;
+      deniedPermissions?: ApiKeyCapability[];
+    }
+  >;
   let gateway: EventsGateway;
   let sockets: RoomSocket[];
 
@@ -935,6 +1051,18 @@ describe('EventsGateway session.qr role gate', () => {
 
     gateway.emitQRCode('sess-1', 'data:image/png;base64,QR');
 
+    expect(sock.rooms.has(QR_DENIED_ROOM)).toBe(true);
+    expect(qrEvents(sock)).toEqual([]);
+  });
+
+  it('denies the QR to an operator blocked from sessions:pair', async () => {
+    keys.operator.deniedPermissions = [ApiKeyCapability.SESSIONS_PAIR];
+    const sock = await connect('operator');
+    const response = (await subscribe(sock, 'sess-1', ['session.qr'])) as WSErrorResponse;
+
+    gateway.emitQRCode('sess-1', 'data:image/png;base64,QR');
+
+    expect(response.code).toBe('FORBIDDEN_EVENTS');
     expect(sock.rooms.has(QR_DENIED_ROOM)).toBe(true);
     expect(qrEvents(sock)).toEqual([]);
   });

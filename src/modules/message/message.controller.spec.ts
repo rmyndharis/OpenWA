@@ -6,6 +6,9 @@ import type { Server } from 'http';
 import { EventEmitter } from 'events';
 import { Readable } from 'stream';
 import { MessageController } from './message.controller';
+import { Reflector } from '@nestjs/core';
+import { CAPABILITIES_KEY } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { MessageService } from './message.service';
 import { BulkMessageService } from './bulk-message.service';
 import { ChatScopeService } from '../auth/chat-scope.service';
@@ -572,5 +575,17 @@ describe('MessageController - clickButton send idempotency', () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe('MessageController capabilities', () => {
+  it('requires messages:read to forward, which hands a stored message to another chat', () => {
+    // Metadata lookup key, never invoked.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const handler = MessageController.prototype.forward;
+    expect(new Reflector().get<ApiKeyCapability[]>(CAPABILITIES_KEY, handler)).toEqual([
+      ApiKeyCapability.MESSAGES_SEND,
+      ApiKeyCapability.MESSAGES_READ,
+    ]);
   });
 });

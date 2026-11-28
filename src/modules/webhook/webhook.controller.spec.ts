@@ -10,6 +10,7 @@ import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { WebhookRedriveService } from './webhook-redrive.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 
 /**
  * Regression locks for the secret/headers leak and read authorization at the controller level.
@@ -121,6 +122,30 @@ describe('Webhook controllers (secret leak + read authz)', () => {
     expect(result.id).toBe('wh-uuid-1');
   });
 
+  it('refuses a session.qr webhook for a key blocked from pairing', async () => {
+    const key = {
+      id: 'key-1',
+      deniedPermissions: [ApiKeyCapability.SESSIONS_PAIR],
+    } as unknown as ApiKey;
+
+    await expect(
+      controller.create('sess-1', { url: 'https://example.com/webhook', events: ['session.qr'] }, key),
+    ).rejects.toThrow('sessions:pair');
+    expect(service.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a wildcard webhook when any included event is blocked', async () => {
+    const key = {
+      id: 'key-1',
+      deniedPermissions: [ApiKeyCapability.SESSIONS_PAIR],
+    } as unknown as ApiKey;
+
+    await expect(
+      controller.create('sess-1', { url: 'https://example.com/webhook', events: ['*'] }, key),
+    ).rejects.toThrow('sessions:pair');
+    expect(service.create).not.toHaveBeenCalled();
+  });
+
   it('update response returns no secret/headers', async () => {
     (service.findOne as jest.Mock).mockResolvedValue(createSecretWebhook());
     (service.update as jest.Mock).mockResolvedValue(createSecretWebhook({ url: 'https://new.example.com/hook' }));
@@ -130,6 +155,17 @@ describe('Webhook controllers (secret leak + read authz)', () => {
     expect(result).not.toHaveProperty('secret');
     expect(result).not.toHaveProperty('headers');
     expect(result.url).toBe('https://new.example.com/hook');
+  });
+
+  it('refuses editing an existing session.qr webhook with a pairing-blocked key', async () => {
+    (service.findOne as jest.Mock).mockResolvedValue(createSecretWebhook({ events: ['session.qr'] }));
+    const key = {
+      id: 'key-1',
+      deniedPermissions: [ApiKeyCapability.SESSIONS_PAIR],
+    } as unknown as ApiKey;
+
+    await expect(controller.update('sess-1', 'wh-uuid-1', { active: false }, key)).rejects.toThrow('sessions:pair');
+    expect(service.update).not.toHaveBeenCalled();
   });
 
   // ── read routes require OPERATOR+ (VIEWER → 403 via guard) ─────

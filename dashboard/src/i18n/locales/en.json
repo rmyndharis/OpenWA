@@ -50,7 +50,8 @@
     "errorGeneric": "An error occurred",
     "unknownError": "Unknown error",
     "retry": "Retry",
-    "copyFailed": "Could not copy to clipboard"
+    "copyFailed": "Could not copy to clipboard",
+    "noDashboardAccess": "This API key is blocked from every dashboard page."
   },
   "theme": {
     "light": "Light",
@@ -801,6 +802,15 @@
     "sessionSelect": "Session"
   },
   "apiKeys": {
+    "capabilities": {
+      "accessLabel": "Permission access",
+      "label": "Blocked capabilities",
+      "hint": "Empty = nothing blocked",
+      "blockAll": "Block all",
+      "clearAll": "Clear all",
+      "inherited": "Restrictions inherited from your current API key cannot be removed.",
+      "selfLocked": "The API key in use cannot change its own restrictions."
+    },
     "title": "API Keys",
     "subtitle": "Manage API keys for authentication and access control",
     "createBtn": "Create API Key",
@@ -872,6 +882,7 @@
       "signedIn": "This dashboard is signed in with this key. Changing its role, IP addresses, chats or expiry can sign you out."
     },
     "restrictions": {
+      "capabilities": "{{count}} blocked",
       "none": "None",
       "ips": "IPs: {{count}}",
       "chats": "Chats: {{count}}",

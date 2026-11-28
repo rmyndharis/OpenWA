@@ -913,8 +913,10 @@ not recognise: see "Session stuck at `action_required`" above.
 - On Baileys, contact statuses never reach the status list of an account that receives them as
   `<status>` stanzas (the status-ack patch is missing, or is the 0.30.1 revision, which only
   acknowledged them)
+- On whatsapp-web.js, a session that is not linked yet never shows a QR code, and the start fails with
+  `auth timeout` (the login-route patch is missing)
 
-**Cause:** OpenWA applies fourteen exact source transforms to its engine libraries at install time
+**Cause:** OpenWA applies fifteen exact source transforms to its engine libraries at install time
 (docs/29 §29.3). The Docker image runs them without `--best-effort`, so a source shape a patcher
 cannot recognise fails the image build. Source installs run the Puppeteer compatibility transform
 without best-effort too, because browser teardown depends on it. The other transforms use

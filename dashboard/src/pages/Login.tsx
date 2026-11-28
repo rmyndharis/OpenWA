@@ -5,6 +5,7 @@ import { GithubIcon } from '../components/GithubIcon';
 import { CustomSelect } from '../components/CustomSelect';
 import { languageOptions, resolveSupportedLanguage, type SupportedLanguage } from '../i18n';
 import { authApi } from '../services/api';
+import { normalizeDeniedPermissions } from '../utils/authLifecycle';
 import './Login.css';
 
 export interface LoginSessionResult {
@@ -12,6 +13,7 @@ export interface LoginSessionResult {
   engineType?: string;
   scoped?: boolean;
   apiKeyId?: string;
+  deniedPermissions?: string[];
 }
 
 interface LoginProps {
@@ -53,6 +55,7 @@ export function Login({ onLogin }: LoginProps) {
           engineType?: string;
           scoped?: unknown;
           apiKeyId?: unknown;
+          deniedPermissions?: unknown;
         } = await response.json().catch(() => ({}));
         // A 200 is the gateway's answer only if it says the session is valid: a reverse proxy
         // serving the app's HTML for a misrouted /api would otherwise sign any typed text in as a viewer.
@@ -72,6 +75,7 @@ export function Login({ onLogin }: LoginProps) {
           engineType: typeof data.engineType === 'string' ? data.engineType : undefined,
           scoped: data.scoped === true,
           apiKeyId: typeof data.apiKeyId === 'string' && data.apiKeyId.length > 0 ? data.apiKeyId : undefined,
+          deniedPermissions: normalizeDeniedPermissions(data.deniedPermissions),
         });
       } else {
         // A 5xx, or a body that is not the gateway's JSON (a proxy error page while it restarts), says

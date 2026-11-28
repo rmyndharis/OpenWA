@@ -66,6 +66,7 @@ function installFetchStub(): void {
 let rtl: typeof import('@testing-library/react');
 let ApiKeys: (typeof import('./ApiKeys.tsx'))['ApiKeys'];
 let ToastProvider: (typeof import('../components/Toast.tsx'))['ToastProvider'];
+let RoleContext: (typeof import('../hooks/useRole.tsx'))['RoleContext'];
 let queryClient: QueryClient | undefined;
 
 before(async () => {
@@ -76,6 +77,7 @@ before(async () => {
   await i18nReady;
   rtl = await import('@testing-library/react');
   ({ ToastProvider } = await import('../components/Toast.tsx'));
+  ({ RoleContext } = await import('../hooks/useRole.tsx'));
   ({ ApiKeys } = await import('./ApiKeys.tsx'));
 });
 
@@ -94,15 +96,35 @@ afterEach(() => {
   window.sessionStorage.removeItem('openwa_api_key_id');
 });
 
-function renderApiKeys(): void {
+function renderApiKeys(deniedPermissions: readonly string[] = []): void {
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
-  rtl.render(
-    createElement(
-      QueryClientProvider,
-      { client: queryClient },
-      createElement(ToastProvider, null, createElement(ApiKeys)),
-    ),
-  );
+  const page = createElement(ApiKeys);
+  const content =
+    deniedPermissions.length === 0
+      ? page
+      : createElement(
+          RoleContext.Provider,
+          {
+            value: {
+              role: 'admin',
+              setRole: () => undefined,
+              isAdmin: true,
+              isOperator: false,
+              isViewer: false,
+              canWrite: true,
+              deniedPermissions,
+              setDeniedPermissions: () => undefined,
+              engineType: 'baileys',
+              setEngineType: () => undefined,
+              scoped: false,
+              setScoped: () => undefined,
+              apiKeyId: 'actor-key',
+              setApiKeyId: () => undefined,
+            },
+          },
+          page,
+        );
+  rtl.render(createElement(QueryClientProvider, { client: queryClient }, createElement(ToastProvider, null, content)));
 }
 
 test('a key row shows its prefix masked and offers no show/hide toggle', async () => {
@@ -150,12 +172,89 @@ test('a failed read shows the error instead of the empty state', async () => {
   assert.ok(!rtl.screen.queryByText('No API keys created'), 'a failed read rendered as an empty list');
 });
 
-async function openCreate(): Promise<HTMLButtonElement> {
-  renderApiKeys();
+async function openCreate(deniedPermissions: readonly string[] = []): Promise<HTMLButtonElement> {
+  renderApiKeys(deniedPermissions);
   await rtl.screen.findByText('owa_k1ab****');
   rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Create API Key' }));
   return rtl.screen.getByRole<HTMLButtonElement>('button', { name: 'Create' });
 }
+
+test('a created key inherits blocked capabilities from the signed-in key and cannot clear them', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const create = await openCreate(['messages:read']);
+  const picker = screen.getByRole('dialog').querySelector<HTMLDetailsElement>('.key-permissions');
+  assert.ok(picker);
+  fireEvent.click(picker.querySelector('summary') as HTMLElement);
+  fireEvent.change(screen.getByLabelText('Search Blocked capabilities'), { target: { value: 'messages:read' } });
+  const inherited = screen.getByRole<HTMLInputElement>('checkbox', { name: 'messages:read' });
+  assert.equal(inherited.checked, true);
+  assert.equal(inherited.disabled, true);
+  screen.getByText('Restrictions inherited from your current API key cannot be removed.');
+
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'inherited-key' } });
+  fireEvent.click(create);
+  await waitFor(() => assert.ok(createBody));
+  assert.deepEqual(createBody, {
+    name: 'inherited-key',
+    role: 'operator',
+    allowedSessions: [],
+    deniedPermissions: ['messages:read'],
+  });
+});
+
+test('blocked capabilities stay compact, can be searched, and are submitted', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  const create = await openCreate();
+  const dialog = screen.getByRole('dialog');
+  within(dialog).getByText('Session access (optional)');
+  within(dialog).getByText('Permission access (optional)');
+  const sessionPicker = dialog.querySelector<HTMLDetailsElement>('.session-scope-picker');
+  assert.ok(sessionPicker);
+  assert.equal(sessionPicker.open, false, 'an unrestricted session picker should start collapsed');
+  fireEvent.click(sessionPicker.querySelector('summary') as HTMLElement);
+  assert.equal(sessionPicker.open, true, 'the session picker did not expand');
+  fireEvent.click(sessionPicker.querySelector('summary') as HTMLElement);
+  assert.equal(sessionPicker.open, false, 'the session picker did not collapse');
+
+  const capabilityPicker = dialog.querySelector<HTMLDetailsElement>('.key-permissions');
+  assert.ok(capabilityPicker);
+  assert.equal(capabilityPicker.open, false, 'an empty capability picker should start collapsed');
+  fireEvent.click(capabilityPicker.querySelector('summary') as HTMLElement);
+  assert.equal(capabilityPicker.open, true, 'the capability picker did not expand');
+  const groups = dialog.querySelectorAll<HTMLDetailsElement>('.permission-group');
+  assert.ok(groups.length > 1, 'capabilities were not grouped');
+  assert.ok(
+    [...groups].every(group => !group.open),
+    'capability groups should start collapsed',
+  );
+  fireEvent.click(groups[0].querySelector('summary') as HTMLElement);
+  const blockAll = within(groups[0]).getByRole('button', { name: 'Block all' });
+  fireEvent.click(blockAll);
+  assert.ok(
+    within(groups[0])
+      .getAllByRole<HTMLInputElement>('checkbox')
+      .every(checkbox => checkbox.checked),
+    'Block all did not select the whole group',
+  );
+  fireEvent.click(within(groups[0]).getByRole('button', { name: 'Clear all' }));
+
+  fireEvent.change(screen.getByLabelText('Search Blocked capabilities'), { target: { value: 'messages:send' } });
+  const blocked = screen.getByRole<HTMLInputElement>('checkbox', { name: 'messages:send' });
+  fireEvent.click(blocked);
+  fireEvent.click(capabilityPicker.querySelector('summary') as HTMLElement);
+  assert.equal(capabilityPicker.open, false, 'the capability picker did not collapse');
+  assert.equal(blocked.checked, true, 'collapsing the picker cleared the selected capability');
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'send-only' } });
+  fireEvent.click(create);
+
+  await waitFor(() => assert.ok(createBody));
+  assert.deepEqual(createBody, {
+    name: 'send-only',
+    role: 'operator',
+    allowedSessions: [],
+    deniedPermissions: ['messages:send'],
+  });
+});
 
 test('a create sends the IP allow-list, chats and expiry only when filled in', async () => {
   const { screen, fireEvent, waitFor } = rtl;
@@ -398,6 +497,18 @@ test('an active admin key can be edited; a revoked key cannot', async () => {
   rtl.screen.getByLabelText('Allowed IP addresses (optional)');
 });
 
+test('a restricted signed-in key offers Edit only on keys that block everything it blocks', async () => {
+  keyList = [
+    { ...billingBot, deniedPermissions: ['messages:read', 'messages:send'] },
+    { ...billingBot, id: 'key-2', name: 'ops', keyPrefix: 'owa_k1cd', deniedPermissions: [] },
+  ];
+  renderApiKeys(['messages:read']);
+  await rtl.screen.findByText('owa_k1cd****');
+  const rows = Array.from(document.querySelectorAll('tbody tr'));
+  assert.equal(rows[0].querySelectorAll('[title="Edit access"]').length, 1);
+  assert.equal(rows[1].querySelectorAll('[title="Edit access"]').length, 0);
+});
+
 async function openEdit(key: Record<string, unknown>): Promise<HTMLButtonElement> {
   keyList = [key];
   renderApiKeys();
@@ -417,6 +528,14 @@ test('saving an untouched key sends nothing, even with an expiry and lists set',
   rtl.fireEvent.click(save);
   await rtl.waitFor(() => assert.equal(rtl.screen.queryByRole('button', { name: 'Save' }) === null, true));
   assert.deepEqual(updateBodies, []);
+});
+
+test('saving a key with a stored capability name the picker does not list sends the listed ones', async () => {
+  const { fireEvent, waitFor } = rtl;
+  const save = await openEdit({ ...billingBot, deniedPermissions: ['messages:read', 'messages:future'] });
+  fireEvent.click(save);
+  await waitFor(() => assert.equal(updateBodies.length, 1));
+  assert.deepEqual(updateBodies[0], { deniedPermissions: ['messages:read'] });
 });
 
 test('an edit sends only what changed', async () => {

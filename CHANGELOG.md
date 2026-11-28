@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Audit: `browser_session_created` and `browser_session_ended` rows record which key opened or ended a dashboard browser session, with the client IP and user agent.
 - Recovery: what the database refused is kept in a journal (`RECOVERY_JOURNAL_PATH`, default `./data/recovery-journal.jsonl`), so a restart or a crash while it is away no longer loses it.
 - Scripts: `restore.sh` moves the recovery journal aside when it replaces or stages the data store, so the restored app does not replay it.
+- API keys: an optional `deniedPermissions` blocklist refuses chosen capabilities, such as sending or reading messages, across REST, the `/events` stream and webhooks; MCP and the queue dashboard refuse a key that has one. Thanks @ziyadfazyan.
 
 ### Changed
 
@@ -128,6 +129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recovery: keep a write the database refused because its host did not resolve or could not be reached, instead of giving it up after three tries.
 - Integration: a redrive takes each delivery before it dispatches it, so neither the reconciler nor another redrive sends it again meanwhile; a take left unsettled by a stopped node or a failed database write is taken again after five minutes.
 - Messages: a keyed send that never reached the engine frees its `Idempotency-Key` when the database refused it, or once its request has stalled for ten minutes, so the retry sends it once instead of answering `409`.
+- whatsapp-web.js: a session that is not linked yet gets a QR code again on WhatsApp Web's `/login/` page, where the start failed with `auth timeout`. Thanks @pycriador for the fix, and @ebnhatem, @JBrito19 and @JosueAshton for the reports.
 
 ## [0.32.1] - 2026-11-24
 

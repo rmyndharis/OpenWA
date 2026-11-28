@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Session } from '../services/api';
 import { sessionPickerStartsExpanded, sessionScopeRows } from '../utils/sessionScope';
@@ -13,6 +13,7 @@ interface SessionScopePickerProps {
 export function SessionScopePicker({ sessions, selectedIds, onChange, disabled }: SessionScopePickerProps) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(() => sessionPickerStartsExpanded(selectedIds));
+  const labelId = useId();
   // Live sessions plus any selected id that no longer resolves to one, so a deleted session's id
   // stays visible and can be unticked instead of riding along on every save.
   const rows = sessionScopeRows(sessions, selectedIds);
@@ -21,23 +22,27 @@ export function SessionScopePicker({ sessions, selectedIds, onChange, disabled }
     onChange(selectedIds.includes(id) ? selectedIds.filter(current => current !== id) : [...selectedIds, id]);
   };
 
-  const chooseSessions = () => setExpanded(true);
-  const leaveForAll = () => {
-    onChange([]);
-    setExpanded(false);
-  };
-
   return (
-    <div className="session-scope-picker" role="group" aria-label={t('apiKeys.sessions.label')}>
-      {expanded ? (
-        <>
-          <button
-            type="button"
-            className="session-scope-toggle"
-            onClick={leaveForAll}
-            disabled={disabled}
-            aria-expanded="true"
-          >
+    <div className="access-scope-field session-scope-field">
+      <span id={labelId} className="access-scope-label">
+        {t('apiKeys.sessions.label')} ({t('common.optional')})
+      </span>
+      <details
+        className="access-scope-picker session-scope-picker"
+        open={expanded}
+        onToggle={event => setExpanded(event.currentTarget.open)}
+        aria-labelledby={labelId}
+      >
+        <summary className="access-scope-summary">
+          <span>{t('apiKeys.sessions.choose')}</span>
+          <span className="access-scope-count">
+            {selectedIds.length > 0
+              ? t('apiKeys.sessions.restricted', { count: selectedIds.length })
+              : t('apiKeys.sessions.all')}
+          </span>
+        </summary>
+        <div className="access-scope-content">
+          <button type="button" className="session-scope-toggle" onClick={() => onChange([])} disabled={disabled}>
             {t('apiKeys.sessions.leaveAll')}
           </button>
           <p className="session-scope-hint">{t('apiKeys.sessions.hint')}</p>
@@ -75,18 +80,8 @@ export function SessionScopePicker({ sessions, selectedIds, onChange, disabled }
               ))}
             </ul>
           )}
-        </>
-      ) : (
-        <button
-          type="button"
-          className="session-scope-toggle"
-          onClick={chooseSessions}
-          disabled={disabled}
-          aria-expanded="false"
-        >
-          {t('apiKeys.sessions.choose')}
-        </button>
-      )}
+        </div>
+      </details>
     </div>
   );
 }

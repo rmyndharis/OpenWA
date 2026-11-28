@@ -25,6 +25,17 @@ else:
     from typing_extensions import NotRequired
 
 Jid = str
+ApiKeyCapability = Literal[
+    "apikeys:manage", "audit:read", "automation:read", "automation:write", "calls:manage",
+    "catalog:read", "catalog:send", "channels:read", "channels:write", "chats:manage", "chats:read",
+    "contacts:read", "contacts:write", "events:read", "groups:invite", "groups:manage", "groups:read",
+    "infra:read", "infra:write", "integrations:manage", "labels:read", "labels:write", "media:convert",
+    "messages:delete", "messages:edit", "messages:moderate", "messages:read", "messages:send",
+    "plugins:read", "plugins:write", "profile:write", "search:read", "sessions:config", "sessions:create",
+    "sessions:lifecycle", "sessions:pair", "sessions:proxy", "sessions:read", "settings:read", "stats:read",
+    "status:delete", "status:read", "status:send", "templates:read", "templates:write", "webhooks:read",
+    "webhooks:write",
+]
 SessionStatus = Literal[
     "created",
     "initializing",
@@ -1355,6 +1366,7 @@ class AuthValidateResponse(_AuthValidateRequired, total=False):
     role: Literal["admin", "operator", "viewer"]
     engineType: str
     scoped: bool
+    deniedPermissions: list[ApiKeyCapability]
 
 
 # ── Template ──────────────────────────────────────────────────────

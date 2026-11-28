@@ -7,7 +7,8 @@ import { CreateChannelDto } from './dto/create-channel.dto';
 import { MuteChannelDto } from './dto/mute-channel.dto';
 import { DemoteChannelAdminDto } from './dto/demote-channel-admin.dto';
 import { TransferChannelOwnershipDto } from './dto/transfer-channel-ownership.dto';
-import { RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import {
   CHANNEL_INVITE_NOT_FOUND_404,
@@ -44,6 +45,7 @@ const WWJS_UNFOLLOWED = ' A repeat of it may meet a channel that is no longer fo
 export class ChannelController {
   constructor(private readonly channelService: ChannelService) {}
 
+  @Capability(ApiKeyCapability.CHANNELS_READ)
   @Get()
   @ApiOperation({ summary: 'Get all subscribed channels/newsletters' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -64,6 +66,7 @@ export class ChannelController {
     return this.channelService.getSubscribedChannels(sessionId);
   }
 
+  @Capability(ApiKeyCapability.CHANNELS_READ)
   @Get(':channelId')
   @ApiOperation({ summary: 'Get a specific channel by ID' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -92,6 +95,7 @@ export class ChannelController {
     return this.channelService.getChannelById(sessionId, channelId);
   }
 
+  @Capability(ApiKeyCapability.CHANNELS_READ)
   @Get(':channelId/messages')
   @ApiOperation({ summary: 'Get messages from a channel' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -127,6 +131,7 @@ export class ChannelController {
     return this.channelService.getChannelMessages(sessionId, channelId, Number.isNaN(parsed) ? undefined : parsed);
   }
 
+  @Capability(ApiKeyCapability.CHANNELS_WRITE)
   @Post()
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.CREATED)
@@ -152,6 +157,7 @@ export class ChannelController {
     return this.channelService.createChannel(sessionId, dto.name, dto.description);
   }
 
+  @Capability(ApiKeyCapability.CHANNELS_WRITE)
   @Post(':channelId/delete')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -185,6 +191,7 @@ export class ChannelController {
     return { success: true };
   }
 
+  @Capability(ApiKeyCapability.CHANNELS_WRITE)
   @Post(':channelId/mute')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -222,6 +229,7 @@ export class ChannelController {
     return { success: true };
   }
 
+  @Capability(ApiKeyCapability.CHANNELS_WRITE)
   @Post(':channelId/admins/demote')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -259,6 +267,7 @@ export class ChannelController {
     return { success: true };
   }
 
+  @Capability(ApiKeyCapability.CHANNELS_WRITE)
   @Post(':channelId/owner/transfer')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -305,6 +314,7 @@ export class ChannelController {
     return { success: true };
   }
 
+  @Capability(ApiKeyCapability.CHANNELS_WRITE)
   @Post('subscribe')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Subscribe to a channel using invite code' })
@@ -340,6 +350,7 @@ export class ChannelController {
     return this.channelService.subscribeToChannel(sessionId, body.inviteCode);
   }
 
+  @Capability(ApiKeyCapability.CHANNELS_WRITE)
   @Delete(':channelId')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Unsubscribe from a channel' })

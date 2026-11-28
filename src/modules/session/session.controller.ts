@@ -50,12 +50,14 @@ import { paginate } from '../../common/utils/paginate';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import {
+  Capability,
   ChatScoped,
   CurrentApiKey,
   RequireRole,
   RequireUnscopedKey,
   SessionScoped,
 } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ChatScopeService } from '../auth/chat-scope.service';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import {
@@ -90,6 +92,7 @@ export class SessionController {
     return SessionResponseDto.fromEntity(session, loaded);
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_CREATE)
   @Post()
   @RequireRole(ApiKeyRole.OPERATOR)
   // Creating a session has no existing session id for the class-level @SessionScoped fence to check,
@@ -133,6 +136,7 @@ export class SessionController {
     return this.transformSession(session);
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_READ)
   @Get()
   @ApiOperation({ summary: 'List all sessions' })
   @ApiResponse({
@@ -184,6 +188,7 @@ export class SessionController {
   }
 
   @ChatScoped('agnostic')
+  @Capability(ApiKeyCapability.SESSIONS_READ)
   @Get(':sessionId')
   @ApiOperation({ summary: 'Get session by ID' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -200,6 +205,7 @@ export class SessionController {
     return this.transformSession(session, now);
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_READ)
   @Get(':sessionId/config')
   @ApiOperation({ summary: 'Get the tunable configuration for a session' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -214,6 +220,7 @@ export class SessionController {
     return this.sessionService.getConfig(id);
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_CONFIG)
   @Patch(':sessionId/config')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({
@@ -248,6 +255,7 @@ export class SessionController {
     return config;
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_PROXY)
   @Get(':sessionId/proxy')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -265,6 +273,7 @@ export class SessionController {
     return this.sessionService.getProxy(id);
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_PROXY)
   @Patch(':sessionId/proxy')
   // A session proxy carries all of the session's egress, including the gateway's fetches of
   // caller-supplied URLs, and its host is not checked against internal addresses: it is trusted
@@ -299,6 +308,7 @@ export class SessionController {
     return proxy;
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_LIFECYCLE)
   @Delete(':sessionId')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -333,6 +343,7 @@ export class SessionController {
     });
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_LIFECYCLE)
   @Post(':sessionId/start')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -392,6 +403,7 @@ export class SessionController {
     return this.transformSession(session);
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_LIFECYCLE)
   @Post(':sessionId/stop')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -436,6 +448,7 @@ export class SessionController {
     return this.transformSession(session);
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_LIFECYCLE)
   @Post(':sessionId/logout')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -514,6 +527,7 @@ export class SessionController {
     return this.transformSession(session);
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_LIFECYCLE)
   @Post(':sessionId/force-kill')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -547,6 +561,7 @@ export class SessionController {
     return this.transformSession(session);
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_PAIR)
   @Get(':sessionId/qr')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Get QR code for session authentication' })
@@ -577,6 +592,7 @@ export class SessionController {
     return qrCode;
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_PAIR)
   @Post(':sessionId/pairing-code')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({
@@ -613,6 +629,7 @@ export class SessionController {
   // Shares a Path Item with GroupController's POST on the same route — one parameter name for the
   // one positional segment, or the contract splits it into two entries.
   @ChatScoped('filtered')
+  @Capability(ApiKeyCapability.GROUPS_READ)
   @Get(':sessionId/groups')
   @ApiOperation({ summary: 'Get all groups for a session' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -652,6 +669,7 @@ export class SessionController {
   }
 
   @ChatScoped('filtered')
+  @Capability(ApiKeyCapability.CHATS_READ, ApiKeyCapability.MESSAGES_READ)
   @Get(':sessionId/chats')
   @ApiOperation({ summary: 'Get active chats for a session' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -688,6 +706,7 @@ export class SessionController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CHATS_MANAGE)
   @Post(':sessionId/chats/read')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -721,6 +740,7 @@ export class SessionController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post(':sessionId/presence/subscribe')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -755,6 +775,7 @@ export class SessionController {
     return { success: true };
   }
 
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Put(':sessionId/presence')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({
@@ -799,6 +820,7 @@ export class SessionController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CHATS_READ)
   @Get(':sessionId/presence/:chatId')
   @RequireRole(ApiKeyRole.VIEWER)
   @ApiOperation({
@@ -835,6 +857,7 @@ export class SessionController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CHATS_MANAGE)
   @Post(':sessionId/chats/unread')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -867,6 +890,7 @@ export class SessionController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_DELETE)
   @Delete(':sessionId/chats/:chatId/messages')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -904,6 +928,7 @@ export class SessionController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CHATS_MANAGE)
   @Post(':sessionId/chats/archive')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -936,6 +961,7 @@ export class SessionController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CHATS_MANAGE)
   @Post(':sessionId/chats/mute')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -973,6 +999,7 @@ export class SessionController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CHATS_MANAGE)
   @Post(':sessionId/chats/pin')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -1008,6 +1035,7 @@ export class SessionController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CHATS_MANAGE)
   @Post(':sessionId/chats/delete')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -1044,6 +1072,7 @@ export class SessionController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post(':sessionId/chats/typing')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -1066,6 +1095,7 @@ export class SessionController {
     return { success: true };
   }
 
+  @Capability(ApiKeyCapability.SESSIONS_READ)
   @Get('stats/overview')
   @ApiOperation({
     summary: 'Get session statistics for multi-session monitoring',

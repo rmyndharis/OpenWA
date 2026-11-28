@@ -1,5 +1,6 @@
 import { SetMetadata, createParamDecorator, ExecutionContext } from '@nestjs/common';
 import { ApiKeyRole } from '../entities/api-key.entity';
+import type { ApiKeyCapability } from '../api-key-permissions';
 import { Request } from 'express';
 import { ApiKey } from '../entities/api-key.entity';
 
@@ -11,12 +12,37 @@ export const CHAT_SCOPED_KEY = 'chatScoped';
 export const CHAT_QUOTED_ALLOWED_KEY = 'chatQuotedAllowed';
 export const HEADER_AUTH_ONLY_KEY = 'headerAuthOnly';
 export const SIGNED_OUT_PROBE_KEY = 'signedOutProbe';
+export const CAPABILITIES_KEY = 'routeCapabilities';
+export const CAPABILITY_AGNOSTIC_KEY = 'capabilityAgnostic';
+export const UNRESTRICTED_KEY = 'requireUnrestrictedKey';
 
 /**
  * Mark a route as requiring a specific role
  * @example @RequireRole(ApiKeyRole.ADMIN)
  */
 export const RequireRole = (role: ApiKeyRole) => SetMetadata(REQUIRED_ROLE_KEY, role);
+
+/**
+ * Tag a route (handler or controller) with the capability it belongs to, so a key whose
+ * `deniedPermissions` blocks that capability is refused with 403.
+ *
+ * This is a BLOCKLIST: a key with no `deniedPermissions` reaches everything its role and scopes
+ * allow. A capability-restricted key is fail-closed on untagged authenticated routes unless the
+ * handler is explicitly marked {@link CapabilityAgnostic}. A route that serves more than one
+ * surface (e.g. a read a sender also needs) lists every capability it touches, and blocking ANY of
+ * them refuses the route — the safe direction, since the caller blocked a capability for the data
+ * it reaches.
+ *
+ * @example @Capability(ApiKeyCapability.MESSAGES_SEND)
+ */
+export const Capability = (...capabilities: ApiKeyCapability[]) => SetMetadata(CAPABILITIES_KEY, capabilities);
+
+/**
+ * Mark an authenticated self-check that deliberately belongs to no capability surface. Restricted
+ * keys may reach only these explicitly reviewed untagged handlers; every other untagged handler is
+ * refused by ApiKeyGuard.
+ */
+export const CapabilityAgnostic = () => SetMetadata(CAPABILITY_AGNOSTIC_KEY, true);
 
 /**
  * Mark a controller (or route) whose `:id` route param denotes a WhatsApp session id, so the
@@ -41,6 +67,20 @@ export const Public = () => SetMetadata(PUBLIC_KEY, true);
  * @example @RequireUnscopedKey() @Controller('auth/api-keys')
  */
 export const RequireUnscopedKey = () => SetMetadata(UNSCOPED_KEY, true);
+
+/**
+ * Require a completely unrestricted key: no session/chat allowlist and no blocked capability.
+ * Use for authority-changing or deployment-global writes that could otherwise let a restricted
+ * key widen its own effective access through a newly-created credential, plugin or integration.
+ */
+export const RequireUnrestrictedKey = () => SetMetadata(UNRESTRICTED_KEY, true);
+
+/**
+ * Refuse a key with any blocked capability, but keep session-scoped keys, on a route that fences
+ * `allowedSessions` itself (integration instances, redrive, a plugin's per-session config). What these
+ * routes provision runs outside the blocklist, so a capability-restricted key could act through it.
+ */
+export const RequireUnblockedKey = () => SetMetadata(UNRESTRICTED_KEY, 'capabilities');
 
 /** How a handler is safe for a chat-restricted key. See {@link ChatScoped}. */
 export type ChatScopeKind = 'fenced' | 'filtered' | 'agnostic';

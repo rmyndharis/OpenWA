@@ -23,6 +23,7 @@ import { bootstrapKeyFilePath, readBootstrapKey, removeBootstrapKey, writeBootst
 import { ApiKeyUsageTracker } from './api-key-usage-tracker.service';
 import { ActiveKeyIndex } from './active-key-index';
 import { apiKeyAuthorizationFingerprint, normalizeScopeList } from './api-key-authorization';
+import { normalizeDeniedCapabilities } from './api-key-permissions';
 import { normalizeChatAllowList } from '../../common/security/chat-scope';
 import { EventsGateway, type ApiKeyEvictionReason } from '../events/events.gateway';
 import { BrowserSessionService } from './browser-session.service';
@@ -280,6 +281,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       allowedIps: dto.allowedIps || null,
       allowedSessions: normalizeScopeList(dto.allowedSessions),
       allowedChats: normalizeChatAllowList(dto.allowedChats),
+      deniedPermissions: normalizeDeniedCapabilities(dto.deniedPermissions),
       expiresAt: dto.expiresAt ? AuthService.parseExpiry(dto.expiresAt) : null,
     });
 
@@ -318,21 +320,26 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     const stripsAdmin =
       (!!dto.role && dto.role !== ApiKeyRole.ADMIN) ||
       (normalizeScopeList(dto.allowedSessions)?.length ?? 0) > 0 ||
-      (normalizeChatAllowList(dto.allowedChats)?.length ?? 0) > 0;
+      (normalizeChatAllowList(dto.allowedChats)?.length ?? 0) > 0 ||
+      // A blocked-capability list can include `apikeys:manage`, so such an admin can no longer manage
+      // keys even when it can authenticate — same lockout risk as a scope.
+      (normalizeDeniedCapabilities(dto.deniedPermissions)?.length ?? 0) > 0;
     const expiry = dto.expiresAt ? AuthService.parseExpiry(dto.expiresAt) : null;
     const setsExpiry = expiry !== null;
     const removesOrSchedulesLastAdmin = stripsAdmin || setsExpiry;
 
     // Capture the authorization-relevant fields BEFORE applying the change. Only a change to role,
-    // allowedIps, allowedSessions, allowedChats, or expiry can widen or restrict what an already-connected WebSocket
-    // socket may see, so only those trigger eviction of live /events sockets — a benign rename must
-    // NOT disconnect clients. REST enforces the new state immediately; without eviction a live socket
-    // keeps streaming events for sessions/IPs the key just lost until it resubscribes or drops.
+    // allowedIps, allowedSessions, allowedChats, deniedPermissions, or expiry can widen or restrict what an
+    // already-connected WebSocket socket may see, so only those trigger eviction of live /events
+    // sockets — a benign rename must NOT disconnect clients. REST enforces the new state immediately;
+    // without eviction a live socket keeps streaming events for sessions/IPs the key just lost until
+    // it resubscribes or drops.
     const before = {
       role: apiKey.role,
       allowedIps: apiKey.allowedIps,
       allowedSessions: apiKey.allowedSessions,
       allowedChats: apiKey.allowedChats,
+      deniedPermissions: apiKey.deniedPermissions,
       expiresAt: apiKey.expiresAt,
     };
 
@@ -342,6 +349,9 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     if (dto.allowedIps !== undefined) patch.allowedIps = dto.allowedIps;
     if (dto.allowedSessions !== undefined) patch.allowedSessions = normalizeScopeList(dto.allowedSessions);
     if (dto.allowedChats !== undefined) patch.allowedChats = normalizeChatAllowList(dto.allowedChats);
+    if (dto.deniedPermissions !== undefined) {
+      patch.deniedPermissions = normalizeDeniedCapabilities(dto.deniedPermissions);
+    }
     if (dto.expiresAt !== undefined) patch.expiresAt = expiry;
 
     let saved: ApiKey;
@@ -446,7 +456,8 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       `${col('role')} = :adminRole AND ${col('isActive')} = 1 AND ` +
       `(${col('expiresAt')} IS NULL OR ${col('expiresAt')} > :guardNow) AND ` +
       `(${col('allowedSessions')} = '' OR ${col('allowedSessions')} IS NULL) AND ` +
-      `(${col('allowedChats')} = '' OR ${col('allowedChats')} IS NULL)`
+      `(${col('allowedChats')} = '' OR ${col('allowedChats')} IS NULL) AND ` +
+      `(${col('deniedPermissions')} = '' OR ${col('deniedPermissions')} IS NULL)`
     );
   }
 

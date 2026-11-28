@@ -50,7 +50,8 @@
     "errorGeneric": "Ein Fehler ist aufgetreten",
     "unknownError": "Unbekannter Fehler",
     "retry": "Erneut versuchen",
-    "copyFailed": "Kopieren in die Zwischenablage fehlgeschlagen"
+    "copyFailed": "Kopieren in die Zwischenablage fehlgeschlagen",
+    "noDashboardAccess": "Dieser API-Schlüssel ist für alle Dashboard-Seiten gesperrt."
   },
   "theme": {
     "light": "Hell",
@@ -801,6 +802,15 @@
     "sessionSelect": "Sitzung"
   },
   "apiKeys": {
+    "capabilities": {
+      "accessLabel": "Berechtigungszugriff",
+      "label": "Blockierte Fähigkeiten",
+      "hint": "Leer = nichts blockiert",
+      "blockAll": "Alle blockieren",
+      "clearAll": "Alle löschen",
+      "inherited": "Vom aktuellen API-Schlüssel geerbte Einschränkungen können nicht entfernt werden.",
+      "selfLocked": "Der verwendete API-Schlüssel kann seine eigenen Einschränkungen nicht ändern."
+    },
     "title": "API-Schlüssel",
     "subtitle": "API-Schlüssel für Authentifizierung und Zugriffskontrolle verwalten",
     "createBtn": "API-Schlüssel erstellen",
@@ -872,6 +882,7 @@
       "signedIn": "Dieses Dashboard ist mit diesem Schlüssel angemeldet. Wenn du Rolle, IP-Adressen, Chats oder Ablauf änderst, kannst du abgemeldet werden."
     },
     "restrictions": {
+      "capabilities": "{{count}} blockiert",
       "none": "Keine",
       "ips": "IPs: {{count}}",
       "chats": "Chats: {{count}}",

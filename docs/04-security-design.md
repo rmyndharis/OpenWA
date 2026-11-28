@@ -77,8 +77,9 @@ from the environment or set to another value, and still shows them until it is r
 
 ### Permission Model
 
-API keys carry **no permission strings**. Authorization is a role hierarchy on the key itself, plus
-three scoping dimensions enforced by `ApiKeyGuard`.
+Authorization is a role hierarchy on the key itself, plus three scoping dimensions and an optional
+capability blocklist, all enforced by `ApiKeyGuard`. A key with no `deniedPermissions` carries no
+capability fence, which is how every key minted before that field existed still behaves.
 
 | Role       | Rank | Meaning                                                                                             |
 | ---------- | ---- | --------------------------------------------------------------------------------------------------- |
@@ -92,22 +93,96 @@ Profile-picture and phone-resolution reads are open to VIEWER keys; the dashboar
 contact phone labels. Channel metadata and group invite previews are also readable. Number-existence checks and phone-to-LID
 lookups require OPERATOR. These permissions still apply within the key's IP, session and chat scopes.
 
-| Scope     | Field             | Effect                                                                                                                                                                                                              |
-| --------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Source IP | `allowedIps`      | Empty/absent = unrestricted; non-empty = fail-closed IP whitelist (see §4.3)                                                                                                                                        |
-| Sessions  | `allowedSessions` | Empty/absent = every session; non-empty = a session named in the route path outside the list is rejected with `403`, and a `sessionId` filter in the query or body is narrowed to the list (an empty result, `200`) |
-| Chats     | `allowedChats`    | Empty/absent = every chat; non-empty = default-deny: only chat-scoped routes, MCP tools and events, only for a listed chat, else `403` (an event outside the list is never delivered); Bull Board refuses it        |
+| Scope     | Field               | Effect                                                                                                                                                                                                              |
+| --------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source IP | `allowedIps`        | Empty/absent = unrestricted; non-empty = fail-closed IP whitelist (see §4.3)                                                                                                                                        |
+| Sessions  | `allowedSessions`   | Empty/absent = every session; non-empty = a session named in the route path outside the list is rejected with `403`, and a `sessionId` filter in the query or body is narrowed to the list (an empty result, `200`) |
+| Chats     | `allowedChats`      | Empty/absent = every chat; non-empty = default-deny: only chat-scoped routes, MCP tools and events, only for a listed chat, else `403` (an event outside the list is never delivered); Bull Board refuses it        |
+| Blocked   | `deniedPermissions` | Empty/absent = nothing blocked; each entry turns off the routes tagged with that capability, else `403` (see "Blocked capabilities")                                                                                |
 
 Scope a chat-restricted key by the number WhatsApp holds for a contact (the number check returns it).
 A key scoped to another spelling of that number, a Brazilian mobile with or without its ninth digit for
 one, can send to it but reads neither the contact's replies nor the rows of its own sends: both are
 stored under the number WhatsApp holds.
 
-The key-lifecycle routes (`/api/auth/api-keys`) are additionally fenced with `@RequireUnscopedKey()`:
-a session-scoped key is refused there whatever its role, so it cannot mint or widen credentials
-beyond its own confinement. The same fence covers the other routes that act on the whole deployment:
+The key-lifecycle routes (`/api/auth/api-keys`) are fenced with `@RequireUnscopedKey()`: session- and
+chat-scoped keys are refused. A capability-restricted ADMIN may manage keys unless it blocks
+`apikeys:manage`. A key it creates inherits all of its blocked capabilities. It may update only a key
+that already blocks everything it blocks, and the update must keep those blocks; any other update is
+refused with `403`, as is a change to its own blocklist. It therefore cannot mint or widen
+credentials beyond its own confinement. The session-scope fence also covers other routes that act on
+the whole deployment:
 every `/api/infra` route, the plugin routes (except the per-session config override), `GET /api/settings`,
 `GET /api/stats/overview` and `/messages`, `POST /api/sessions` and the proxy setter. `SECURITY.md` lists them.
+
+### Blocked capabilities
+
+`deniedPermissions` on a key removes **surfaces** from what the role and the three scopes already
+allow. It is a blocklist, not an allowlist: a key with an empty list behaves exactly as before this
+field existed, and each entry turns off the routes tagged with that capability. An authenticated
+route without capability metadata is refused to a capability-restricted key (fail closed). Only
+public routes and explicitly capability-agnostic self-checks (`POST /api/auth/validate` and the
+dashboard browser-session endpoints) bypass that classification.
+
+| Group        | Capabilities                                                                                                   | Turns off                                                                                                                                                                                                 |
+| ------------ | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Messages     | `messages:read`, `messages:send`, `messages:edit`, `messages:delete`, `messages:moderate`                      | History/reactions/receipts/media/batch status; every send, reply, forward, react, bulk, send-product, typing and presence write; edit; delete message or clear a chat; pin/unpin/star/vote-poll           |
+| Chats        | `chats:read`, `chats:manage`                                                                                   | A session's chat list and presence reads; mark read/unread, archive, mute, pin, delete a chat                                                                                                             |
+| Contacts     | `contacts:read`, `contacts:write`                                                                              | The directory, lookups, profile pictures, blocked list; upsert/delete/block/unblock                                                                                                                       |
+| Groups       | `groups:read`, `groups:manage`, `groups:invite`                                                                | Detail, settings, membership-request and picture reads; create/settings/participants/subject/description/member label/leave/picture/membership decisions; join preview, join, invite-code read and revoke |
+| Sessions     | `sessions:read`, `sessions:create`, `sessions:lifecycle`, `sessions:pair`, `sessions:config`, `sessions:proxy` | List/detail/config reads and session stats; create; start/stop/logout/force-kill/delete; QR and pairing code; tunable config; the egress proxy                                                            |
+| Labels       | `labels:read`, `labels:write`                                                                                  | Label lists and a chat's labels; label create/update/delete and assignment                                                                                                                                |
+| Profile      | `profile:write`                                                                                                | Name, status and picture changes                                                                                                                                                                          |
+| Catalog      | `catalog:read`, `catalog:send`                                                                                 | Product catalogue reads; send-product                                                                                                                                                                     |
+| Templates    | `templates:read`, `templates:write`                                                                            | Template reads; create/update/delete                                                                                                                                                                      |
+| Webhooks     | `webhooks:read`, `webhooks:write`                                                                              | Webhook reads and delivery failures; create/update/test/delete and redrive                                                                                                                                |
+| Automation   | `automation:read`, `automation:write`                                                                          | Rule reads; create/update/delete                                                                                                                                                                          |
+| Channels     | `channels:read`, `channels:write`                                                                              | Channel reads and messages; create/delete/mute/moderate/transfer/subscribe                                                                                                                                |
+| Status       | `status:read`, `status:send`, `status:delete`                                                                  | Status reads; posting; deleting                                                                                                                                                                           |
+| Media        | `media:convert`                                                                                                | Voice/video conversion tooling                                                                                                                                                                            |
+| Calls        | `calls:manage`                                                                                                 | Accepting or rejecting a call link                                                                                                                                                                        |
+| Search       | `search:read`                                                                                                  | `GET /api/search`                                                                                                                                                                                         |
+| Events       | `events:read`                                                                                                  | The `/events` WebSocket: the handshake is refused (`UNAUTHORIZED`)                                                                                                                                        |
+| Audit        | `audit:read`                                                                                                   | The audit log                                                                                                                                                                                             |
+| Stats        | `stats:read`                                                                                                   | Deployment statistics                                                                                                                                                                                     |
+| Settings     | `settings:read`                                                                                                | Deployment settings                                                                                                                                                                                       |
+| Infra        | `infra:read`, `infra:write`                                                                                    | Status, engines, storage counts, update checks; config/restart, data and storage export/import                                                                                                            |
+| Plugins      | `plugins:read`, `plugins:write`                                                                                | Catalogue and state; install/update/enable/disable/config/uninstall                                                                                                                                       |
+| Integrations | `integrations:manage`                                                                                          | Integration instances and redrive                                                                                                                                                                         |
+| API keys     | `apikeys:manage`                                                                                               | Key lifecycle (create/list/get/update/revoke/delete)                                                                                                                                                      |
+
+A route that touches more than one surface lists every capability (forwarding needs `messages:send`
+and `messages:read`, since it hands a stored message to another chat), and blocking **any** of them
+refuses it — the safe direction, since the operator blocked a capability for the data it reaches.
+The role is still checked first: blocking nothing cannot lift a `viewer` key above its role, and
+blocking `messages:send` on an `admin` key only removes the send routes. A stored list holding a name
+this release does not know (a hand edit, or a value another release wrote) blocks every capability,
+so only the self-checks answer until an unrestricted admin sets the list again.
+
+The practical shapes this enables: an `operator` key that keeps everything except `messages:read`
+(so integration code can push messages but never read history or receive message events), a key that
+keeps `sessions:read` but blocks `sessions:create` and `sessions:lifecycle` (so it can inspect
+sessions without touching them), or a key blocked from `apikeys:manage` so it can never mint a wider
+credential.
+
+An `admin` key with a non-empty `deniedPermissions` list stops counting as a **usable admin** for
+the last-admin invariant, and setting one on the last usable admin is refused with `409`: like a
+session/chat scope, such a key can authenticate but may be blocked from key management, so counting
+it as a surviving admin would bless a management lockout.
+
+`POST /api/mcp` and the Bull Board queue dashboard refuse a key with any blocked capability (`403`):
+neither surface is split into capability-classified handlers, so the blocklist cannot be enforced
+there. Infrastructure data and storage export and import, `PUT /api/infra/config`,
+`POST /api/infra/restart` and the plugin lifecycle writes require a fully unrestricted key.
+Integration instances, redrive and the per-session plugin config refuse a key
+with any blocked capability, and keep their session fence for a session-scoped key. API-key management
+instead follows the rules above.
+
+The dashboard receives the active key's blocklist in the browser-session metadata. A page whose
+primary read capability is blocked is absent from the sidebar and its route is not mounted, so a
+direct URL is redirected to the first page the key may use. This is only navigation hardening; the
+API guard remains the authorization boundary for every request and for write actions inside a
+readable page. When `events:read` is blocked, the dashboard does not open its Socket.IO connection.
 
 A session's egress proxy (`proxyUrl` on `POST /api/sessions`, `PATCH /api/sessions/:sessionId/proxy`)
 is set only by an unscoped `admin` key; any other key gets `403`. The proxy is trusted egress chosen by

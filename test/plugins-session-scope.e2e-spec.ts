@@ -8,6 +8,7 @@ import { AppModule } from './../src/app.module';
 import { applyGlobalValidation } from './../src/config/app-validation';
 import { AuthService } from './../src/modules/auth/auth.service';
 import { ApiKeyRole } from './../src/modules/auth/entities/api-key.entity';
+import { ApiKeyCapability } from './../src/modules/auth/api-key-permissions';
 import { Session } from './../src/modules/session/entities/session.entity';
 
 /**
@@ -119,6 +120,19 @@ describe('Plugin routes reject session-scoped keys (e2e)', () => {
         .expect(404);
       // The handler's own answer: a route that is gone also answers 404, and a refused body 400.
       expect((res.body as { message: string }).message).toBe('Plugin any-plugin not found');
+    });
+
+    it('refuses a capability-restricted ADMIN on that route', async () => {
+      const { rawKey } = await app.get(AuthService).createApiKey({
+        name: 'e2e-plugin-blocked',
+        role: ApiKeyRole.ADMIN,
+        deniedPermissions: [ApiKeyCapability.MESSAGES_READ],
+      });
+      await request(app.getHttpServer())
+        .put(`/api/plugins/any-plugin/config/${sessA}`)
+        .set('X-API-Key', rawKey)
+        .send({ config: {} })
+        .expect(403);
     });
   });
 

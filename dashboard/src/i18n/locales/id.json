@@ -50,7 +50,8 @@
     "errorGeneric": "Terjadi kesalahan",
     "unknownError": "Kesalahan tidak diketahui",
     "retry": "Coba lagi",
-    "copyFailed": "Tidak dapat menyalin ke papan klip"
+    "copyFailed": "Tidak dapat menyalin ke papan klip",
+    "noDashboardAccess": "Kunci API ini diblokir dari semua halaman dasbor."
   },
   "theme": {
     "light": "Terang",
@@ -801,6 +802,15 @@
     "sessionSelect": "Sesi"
   },
   "apiKeys": {
+    "capabilities": {
+      "accessLabel": "Akses izin",
+      "label": "Kemampuan diblokir",
+      "hint": "Kosong = tidak ada yang diblokir",
+      "blockAll": "Blokir semua",
+      "clearAll": "Hapus semua",
+      "inherited": "Pembatasan yang diwarisi dari kunci API Anda saat ini tidak dapat dihapus.",
+      "selfLocked": "Kunci API yang sedang digunakan tidak dapat mengubah pembatasannya sendiri."
+    },
     "title": "Kunci API",
     "subtitle": "Kelola kunci API untuk autentikasi dan kontrol akses",
     "createBtn": "Buat Kunci API",
@@ -872,6 +882,7 @@
       "signedIn": "Anda masuk ke dasbor ini menggunakan kunci ini. Mengubah peran, alamat IP, obrolan, atau tanggal kedaluwarsanya dapat membuat Anda keluar."
     },
     "restrictions": {
+      "capabilities": "{{count}} diblokir",
       "none": "Tidak ada",
       "ips": "IP: {{count}}",
       "chats": "Obrolan: {{count}}",

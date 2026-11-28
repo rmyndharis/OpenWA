@@ -52,7 +52,8 @@
     "errorGeneric": "Si è verificato un errore",
     "unknownError": "Errore sconosciuto",
     "retry": "Riprova",
-    "copyFailed": "Impossibile copiare negli appunti"
+    "copyFailed": "Impossibile copiare negli appunti",
+    "noDashboardAccess": "Questa chiave API è bloccata da tutte le pagine della dashboard."
   },
   "theme": {
     "light": "Chiaro",
@@ -807,6 +808,15 @@
     "sessionSelect": "Sessione"
   },
   "apiKeys": {
+    "capabilities": {
+      "accessLabel": "Accesso ai permessi",
+      "label": "Capacità bloccate",
+      "hint": "Vuoto = nulla bloccato",
+      "blockAll": "Blocca tutto",
+      "clearAll": "Cancella tutto",
+      "inherited": "Le restrizioni ereditate dalla chiave API corrente non possono essere rimosse.",
+      "selfLocked": "La chiave API in uso non può modificare le proprie restrizioni."
+    },
     "title": "Chiavi API",
     "subtitle": "Gestisci le chiavi API per l'autenticazione e il controllo degli accessi",
     "createBtn": "Crea Chiave API",
@@ -878,6 +888,7 @@
       "signedIn": "Questa dashboard ha effettuato l'accesso con questa chiave. Modificarne ruolo, indirizzi IP, chat o scadenza può disconnetterti."
     },
     "restrictions": {
+      "capabilities": "{{count}} bloccate",
       "none": "Nessuna",
       "ips": "IP: {{count}}",
       "chats": "Chat: {{count}}",

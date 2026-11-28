@@ -3,7 +3,8 @@ import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ConversionStatusResponseDto, ConvertedMediaResponseDto } from './dto/media-response.dto';
 import { MediaConversionService } from './media-conversion.service';
 import { ConvertMediaDto } from './dto/convert-media.dto';
-import { RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { MEDIA_URL_PROXY_503 } from '../../common/openapi/engine-status-responses';
 
@@ -26,6 +27,7 @@ import { MEDIA_URL_PROXY_503 } from '../../common/openapi/engine-status-response
 export class MediaController {
   constructor(private readonly mediaConversion: MediaConversionService) {}
 
+  @Capability(ApiKeyCapability.MEDIA_CONVERT)
   @Get('convert')
   @ApiOperation({ summary: 'Whether server-side media conversion is available' })
   @ApiResponse({
@@ -40,6 +42,7 @@ export class MediaController {
   }
 
   // 200, not 201: this creates no resource, it answers with a representation of what was sent.
+  @Capability(ApiKeyCapability.MEDIA_CONVERT)
   @Post('convert/voice')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -69,6 +72,7 @@ export class MediaController {
     return this.mediaConversion.convertToVoice(sessionId, dto);
   }
 
+  @Capability(ApiKeyCapability.MEDIA_CONVERT)
   @Post('convert/video')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.OPERATOR)

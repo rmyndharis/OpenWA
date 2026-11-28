@@ -17,7 +17,13 @@ import {
   StorageFileCountResponseDto,
   StorageImportResponseDto,
 } from './dto/infra-response.dto';
-import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import {
+  Capability,
+  RequireRole,
+  RequireUnscopedKey,
+  RequireUnrestrictedKey,
+} from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { isPathWithin } from '../../common/utils/path-safety';
 import { ensurePrivateDir } from '../../common/utils/private-dir.util';
@@ -42,11 +48,8 @@ const WALK_REFUSED_DESCRIPTION =
 
 @ApiTags('infrastructure')
 @Controller('infra')
-// Every route here is deployment-global (data export/import, infra config, service orchestration),
-// so the guard's route-param session fence can never bite. Reject session-scoped keys outright at
-// class level, which also covers routes added later. @Public routes are unaffected: the guard
-// returns before it reads this metadata.
-@RequireUnscopedKey()
+// Every route here is deployment-global. Read-only inventory rejects session-scoped keys; storage
+// export/import use the stronger unrestricted-key fence because they move all stored media.
 export class InfraStorageController implements OnApplicationBootstrap {
   private readonly logger = createLogger('InfraStorageController');
 
@@ -149,8 +152,10 @@ export class InfraStorageController implements OnApplicationBootstrap {
     );
   }
 
+  @Capability(ApiKeyCapability.INFRA_READ)
   @Get('storage/files/count')
   @RequireRole(ApiKeyRole.ADMIN)
+  @RequireUnscopedKey()
   @ApiOperation({ summary: 'Get file count in current storage' })
   @ApiResponse({ status: 200, description: 'File count and size', type: StorageFileCountResponseDto })
   @ApiResponse({ status: 409, description: WALK_REFUSED_DESCRIPTION })
@@ -173,6 +178,8 @@ export class InfraStorageController implements OnApplicationBootstrap {
     };
   }
 
+  @Capability(ApiKeyCapability.INFRA_WRITE)
+  @RequireUnrestrictedKey()
   @Get('storage/export')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Export all storage files as tar.gz' })
@@ -265,6 +272,8 @@ export class InfraStorageController implements OnApplicationBootstrap {
     };
   }
 
+  @Capability(ApiKeyCapability.INFRA_WRITE)
+  @RequireUnrestrictedKey()
   @Post('storage/import')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.ADMIN)

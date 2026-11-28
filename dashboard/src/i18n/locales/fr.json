@@ -52,7 +52,8 @@
     "errorGeneric": "Une erreur est survenue",
     "unknownError": "Erreur inconnue",
     "retry": "Réessayer",
-    "copyFailed": "Impossible de copier dans le presse-papiers"
+    "copyFailed": "Impossible de copier dans le presse-papiers",
+    "noDashboardAccess": "Cette clé API est bloquée sur toutes les pages du tableau de bord."
   },
   "theme": {
     "light": "Clair",
@@ -807,6 +808,15 @@
     "sessionSelect": "Session"
   },
   "apiKeys": {
+    "capabilities": {
+      "accessLabel": "Accès aux autorisations",
+      "label": "Capacités bloquées",
+      "hint": "Vide = rien de bloqué",
+      "blockAll": "Tout bloquer",
+      "clearAll": "Tout effacer",
+      "inherited": "Les restrictions héritées de votre clé API actuelle ne peuvent pas être supprimées.",
+      "selfLocked": "La clé API utilisée ne peut pas modifier ses propres restrictions."
+    },
     "title": "Clés API",
     "subtitle": "Gérez les clés API pour l'authentification et le contrôle d'accès",
     "createBtn": "Créer une clé API",
@@ -878,6 +888,7 @@
       "signedIn": "Ce tableau de bord est connecté avec cette clé. Modifier son rôle, ses adresses IP, ses discussions ou son expiration peut vous déconnecter."
     },
     "restrictions": {
+      "capabilities": "{{count}} bloquées",
       "none": "Aucune",
       "ips": "IP : {{count}}",
       "chats": "Discussions : {{count}}",

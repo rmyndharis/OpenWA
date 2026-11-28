@@ -10,6 +10,19 @@ export const DASHBOARD_CSRF_HEADER = 'X-Requested-With';
 export const DASHBOARD_CSRF_HEADER_VALUE = 'OpenWA-Dashboard';
 export const AUTH_SYNC_CHANNEL_NAME = 'openwa_auth';
 export const AUTH_SYNC_STORAGE_KEY = 'openwa_auth_sync';
+export const DENIED_PERMISSIONS_STORAGE_KEY = 'openwa_denied_permissions';
+
+/** Accept only a compact, unique list of capability strings from session metadata. */
+export function normalizeDeniedPermissions(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const permissions: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string') continue;
+    const permission = entry.trim();
+    if (permission && !permissions.includes(permission)) permissions.push(permission);
+  }
+  return permissions;
+}
 
 export interface AuthSyncEvent {
   type: 'logout' | 'login';
@@ -143,6 +156,7 @@ export function clearSessionMetadata(): void {
   sessionStorage.removeItem('openwa_user_role');
   sessionStorage.removeItem('openwa_engine_type');
   sessionStorage.removeItem('openwa_key_scoped');
+  sessionStorage.removeItem(DENIED_PERMISSIONS_STORAGE_KEY);
 }
 
 /** Structural cache surface (a TanStack QueryClient satisfies this) so tests can use a stub. */
@@ -181,7 +195,14 @@ export function isKeyUnusable(status: number, message: unknown): boolean {
 }
 
 export type StartupValidation =
-  | { action: 'role'; role: UserRole; scoped: boolean; engineType?: string; apiKeyId?: string }
+  | {
+      action: 'role';
+      role: UserRole;
+      scoped: boolean;
+      engineType?: string;
+      apiKeyId?: string;
+      deniedPermissions?: string[];
+    }
   | { action: 'logout' }
   | { action: 'keep' };
 
@@ -196,7 +217,14 @@ export type StartupValidation =
  */
 export function resolveStartupValidation(
   status: number,
-  body: { valid?: boolean; role?: string; engineType?: string; scoped?: unknown; apiKeyId?: unknown } | null,
+  body: {
+    valid?: boolean;
+    role?: string;
+    engineType?: string;
+    scoped?: unknown;
+    apiKeyId?: unknown;
+    deniedPermissions?: unknown;
+  } | null,
 ): StartupValidation {
   if (status === 401 || status === 403) return { action: 'logout' };
   if (status < 200 || status >= 300) return { action: 'keep' };
@@ -204,6 +232,9 @@ export function resolveStartupValidation(
     const decision: StartupValidation = { action: 'role', role: body.role, scoped: body.scoped === true };
     if (typeof body.engineType === 'string') decision.engineType = body.engineType;
     if (typeof body.apiKeyId === 'string' && body.apiKeyId.length > 0) decision.apiKeyId = body.apiKeyId;
+    if (Array.isArray(body.deniedPermissions)) {
+      decision.deniedPermissions = normalizeDeniedPermissions(body.deniedPermissions);
+    }
     return decision;
   }
   return { action: 'keep' };

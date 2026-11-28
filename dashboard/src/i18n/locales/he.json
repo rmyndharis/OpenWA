@@ -54,7 +54,8 @@
     "errorGeneric": "אירעה שגיאה",
     "unknownError": "שגיאה לא ידועה",
     "retry": "נסה שוב",
-    "copyFailed": "ההעתקה ללוח נכשלה"
+    "copyFailed": "ההעתקה ללוח נכשלה",
+    "noDashboardAccess": "מפתח API זה חסום מכל דפי לוח הבקרה."
   },
   "theme": {
     "light": "בהיר",
@@ -814,6 +815,15 @@
     "sessionSelect": "Session"
   },
   "apiKeys": {
+    "capabilities": {
+      "accessLabel": "גישה להרשאות",
+      "label": "יכולות חסומות",
+      "hint": "ריק = לא חסום דבר",
+      "blockAll": "חסימת הכול",
+      "clearAll": "ניקוי הכול",
+      "inherited": "לא ניתן להסיר הגבלות שעברו בירושה ממפתח ה-API הנוכחי.",
+      "selfLocked": "מפתח ה-API שבשימוש אינו יכול לשנות את ההגבלות של עצמו."
+    },
     "title": "מפתחות API",
     "subtitle": "ניהול מפתחות API לאימות ובקרת גישה",
     "createBtn": "יצירת מפתח API",
@@ -885,6 +895,7 @@
       "signedIn": "לוח הבקרה הזה מחובר עם המפתח הזה. שינוי התפקיד, כתובות ה-IP, הצ'אטים או התפוגה שלו עלול לנתק אתכם."
     },
     "restrictions": {
+      "capabilities": "{{count}} חסומות",
       "none": "אין",
       "ips": "כתובות IP: {{count}}",
       "chats": "צ'אטים: {{count}}",

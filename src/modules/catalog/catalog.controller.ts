@@ -2,7 +2,8 @@ import { Controller, Get, Post, Param, Body, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { CatalogService } from './catalog.service';
 import { SendProductDto, ProductQueryDto } from './dto/send-product.dto';
-import { ChatScoped, RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, ChatScoped, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { CatalogDto, PaginatedProductsDto, ProductDto, ProductMessageResponseDto } from './dto/catalog-response.dto';
 import { ENGINE_NOT_READY_409, SEND_503, SESSION_NOT_STARTED_404 } from '../../common/openapi/engine-status-responses';
@@ -24,6 +25,7 @@ const CATALOG_REFUSED_403 = 'WhatsApp refused the catalog query.';
 export class CatalogController {
   constructor(private readonly catalogService: CatalogService) {}
 
+  @Capability(ApiKeyCapability.CATALOG_READ)
   @Get('catalog')
   @ApiOperation({ summary: 'Get business catalog info (Baileys engine only)' })
   @ApiResponse({
@@ -43,6 +45,7 @@ export class CatalogController {
     return this.catalogService.getCatalog(sessionId);
   }
 
+  @Capability(ApiKeyCapability.CATALOG_READ)
   @Get('catalog/products')
   @ApiOperation({ summary: 'List catalog products (Baileys engine only)' })
   @ApiResponse({ status: 200, description: 'One page of catalog products', type: PaginatedProductsDto })
@@ -62,6 +65,7 @@ export class CatalogController {
     return this.catalogService.getProducts(sessionId, query.page, query.limit);
   }
 
+  @Capability(ApiKeyCapability.CATALOG_READ)
   @Get('catalog/products/:productId')
   @ApiOperation({ summary: 'Get a specific product (Baileys engine only)' })
   @ApiResponse({
@@ -82,6 +86,7 @@ export class CatalogController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CATALOG_SEND, ApiKeyCapability.MESSAGES_SEND)
   @Post('messages/send-product')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Send a product message (Baileys engine only)' })

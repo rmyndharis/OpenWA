@@ -65,6 +65,35 @@ test('no socket is opened without an active session actor id', () => {
   }
 });
 
+test('no socket is opened when the active key blocks events:read', async () => {
+  const { createElement } = await import('react');
+  const { RoleContext } = await import('./useRole.tsx');
+  const value = {
+    role: 'admin' as const,
+    setRole: () => undefined,
+    isAdmin: true,
+    isOperator: false,
+    isViewer: false,
+    canWrite: true,
+    deniedPermissions: ['events:read'],
+    setDeniedPermissions: () => undefined,
+    engineType: 'baileys',
+    setEngineType: () => undefined,
+    scoped: false,
+    setScoped: () => undefined,
+    apiKeyId: 'key-ws-1',
+    setApiKeyId: () => undefined,
+  };
+
+  function Probe() {
+    useWebSocket();
+    return null;
+  }
+
+  rtl.render(createElement(RoleContext.Provider, { value }, createElement(Probe)));
+  assert.equal(lastIoCall(), null);
+});
+
 test('a RoleContext sessionEpoch bump reconnects a server-disconnected socket even when apiKeyId is unchanged', async () => {
   const { createElement, useState } = await import('react');
   const { RoleContext } = await import('./useRole.tsx');

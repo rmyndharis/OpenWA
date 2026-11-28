@@ -32,6 +32,7 @@ import { EventsGateway } from '../events/events.gateway';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction, AuditLog } from '../audit/entities/audit-log.entity';
 import { ApiKeyUsageTracker } from './api-key-usage-tracker.service';
+import { ApiKeyCapability } from './api-key-permissions';
 
 describe('browser-session.util', () => {
   const savedSecure = process.env.DASHBOARD_SESSION_COOKIE_SECURE;
@@ -479,6 +480,7 @@ describe('BrowserSessionService & CreateBrowserSessions migration (SQLite)', () 
         `"role" varchar(20) NOT NULL DEFAULT ('operator'), ` +
         `"allowedSessions" text, ` +
         `"allowedChats" text, ` +
+        `"deniedPermissions" text, ` +
         `"allowedIps" text, ` +
         `"isActive" boolean NOT NULL DEFAULT (1), ` +
         `"usageCount" integer NOT NULL DEFAULT (0), ` +
@@ -1117,6 +1119,7 @@ describe('BrowserSessionController', () => {
       id: 'k-admin',
       role: ApiKeyRole.ADMIN,
       allowedSessions: ['s1'],
+      deniedPermissions: [ApiKeyCapability.CHATS_READ],
     } as ApiKey;
 
     const body = await controller.createSession(apiKey, req, res);
@@ -1126,6 +1129,7 @@ describe('BrowserSessionController', () => {
       role: ApiKeyRole.ADMIN,
       engineType: 'baileys',
       scoped: true,
+      deniedPermissions: [ApiKeyCapability.CHATS_READ],
       apiKeyId: 'k-admin',
     });
     expect(JSON.stringify(body)).not.toContain('ow_raw_secret');
@@ -1176,6 +1180,7 @@ describe('BrowserSessionController', () => {
       role: ApiKeyRole.OPERATOR,
       engineType: 'baileys',
       scoped: false,
+      deniedPermissions: [],
       apiKeyId: 'k-op',
     });
     expect(setHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');

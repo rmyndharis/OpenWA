@@ -1,4 +1,5 @@
 import { normalizePhoneText } from './phone.ts';
+import type { ApiKeyCapability } from '../services/api.ts';
 
 /**
  * Operator and viewer (reader) API keys may be limited to an explicit session
@@ -134,6 +135,7 @@ interface ScopedKey {
   allowedIps?: string[] | null;
   allowedSessions?: string[] | null;
   allowedChats?: string[] | null;
+  deniedPermissions?: ApiKeyCapability[] | null;
   expiresAt?: string | null;
 }
 
@@ -143,6 +145,7 @@ export interface ApiKeyDraft {
   sessions: string[];
   ips: string;
   chats: string;
+  deniedPermissions: ApiKeyCapability[];
   expires: string;
 }
 
@@ -151,6 +154,7 @@ export interface ApiKeyPatch {
   allowedIps?: string[];
   allowedSessions?: string[];
   allowedChats?: string[];
+  deniedPermissions?: ApiKeyCapability[];
   expiresAt?: string | null;
 }
 
@@ -160,6 +164,7 @@ export function apiKeyDraft(key: ScopedKey): ApiKeyDraft {
     sessions: key.allowedSessions ?? [],
     ips: (key.allowedIps ?? []).join('\n'),
     chats: (key.allowedChats ?? []).join('\n'),
+    deniedPermissions: key.deniedPermissions ?? [],
     expires: toDateTimeLocal(key.expiresAt),
   };
 }
@@ -182,6 +187,11 @@ export function apiKeyPatch(key: ScopedKey, draft: ApiKeyDraft): ApiKeyPatch {
   }
   const ips = parseScopeList(draft.ips);
   if (!sameSessionScope(ips, key.allowedIps ?? [])) patch.allowedIps = ips;
+  // The blocked-capability list is independent of the role: an admin key can carry one too, and an
+  // empty list clears it back to "nothing blocked".
+  if (!sameSessionScope(draft.deniedPermissions, key.deniedPermissions ?? [])) {
+    patch.deniedPermissions = draft.deniedPermissions;
+  }
   // Compared as the form shows it, so an untouched expiry is not re-sent rounded to the minute.
   if (draft.expires !== toDateTimeLocal(key.expiresAt)) {
     patch.expiresAt = draft.expires ? new Date(draft.expires).toISOString() : null;

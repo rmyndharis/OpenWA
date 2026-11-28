@@ -50,7 +50,8 @@
     "errorGeneric": "Bir hata oluştu",
     "unknownError": "Bilinmeyen hata",
     "retry": "Yeniden Dene",
-    "copyFailed": "Panoya kopyalanamadı"
+    "copyFailed": "Panoya kopyalanamadı",
+    "noDashboardAccess": "Bu API anahtarının tüm pano sayfalarına erişimi engellendi."
   },
   "theme": {
     "light": "Açık",
@@ -801,6 +802,15 @@
     "sessionSelect": "Oturum"
   },
   "apiKeys": {
+    "capabilities": {
+      "accessLabel": "İzin erişimi",
+      "label": "Engellenen yetenekler",
+      "hint": "Boş = engellenen yok",
+      "blockAll": "Tümünü engelle",
+      "clearAll": "Tümünü temizle",
+      "inherited": "Geçerli API anahtarınızdan devralınan kısıtlamalar kaldırılamaz.",
+      "selfLocked": "Kullanılan API anahtarı kendi kısıtlamalarını değiştiremez."
+    },
     "title": "API Anahtarları",
     "subtitle": "Kimlik doğrulama ve erişim denetimi için API anahtarlarını yönetin",
     "createBtn": "API Anahtarı Oluştur",
@@ -872,6 +882,7 @@
       "signedIn": "Bu panel bu anahtarla oturum açtı. Rolünü, IP adreslerini, sohbetlerini veya son kullanma tarihini değiştirmek oturumunuzu kapatabilir."
     },
     "restrictions": {
+      "capabilities": "{{count}} engelli",
       "none": "Yok",
       "ips": "IP'ler: {{count}}",
       "chats": "Sohbetler: {{count}}",

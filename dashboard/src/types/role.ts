@@ -8,6 +8,10 @@ export interface RoleContextType {
   isOperator: boolean;
   isViewer: boolean;
   canWrite: boolean;
+  /** Capabilities the active API key is explicitly blocked from. */
+  deniedPermissions?: readonly string[];
+  setDeniedPermissions?: (permissions: readonly string[]) => void;
+  isCapabilityDenied?: (capability: string) => boolean;
   /** Engine the gateway runs, as /auth/session reported it; null until it has answered. */
   engineType: string | null;
   setEngineType: (engineType: string | null) => void;

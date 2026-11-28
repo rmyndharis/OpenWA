@@ -1,5 +1,6 @@
 import type { ApiKey } from './entities/api-key.entity';
 import { normalizeChatAllowList } from '../../common/security/chat-scope';
+import { normalizeDeniedCapabilities } from './api-key-permissions';
 
 /**
  * Collapse an `allowedSessions` list to the two shapes the enforcement sites actually distinguish.
@@ -33,12 +34,12 @@ export function apiKeyExpiryTime(value: Date | string | null | undefined): numbe
 /** The columns that decide what a key may do. Everything else on the row is descriptive or advisory. */
 export type ApiKeyAuthorization = Pick<
   ApiKey,
-  'role' | 'allowedIps' | 'allowedSessions' | 'allowedChats' | 'expiresAt'
+  'role' | 'allowedIps' | 'allowedSessions' | 'allowedChats' | 'deniedPermissions' | 'expiresAt'
 >;
 
 /**
  * A stable string for what a key is AUTHORIZED to do: role, IP allowlist, session scope, chat
- * scope, expiry.
+ * scope, blocked capabilities, expiry.
  * Two rows sharing a fingerprint authorize identically, so any other column moving must leave it
  * untouched, in particular `lastUsedAt`/`usageCount`/`updatedAt`, which the usage tracker rewrites
  * for every key in active use. A fingerprint that moved with them would disconnect every live
@@ -58,6 +59,7 @@ export function apiKeyAuthorizationFingerprint(key: ApiKeyAuthorization): string
     scope(key.allowedIps),
     scope(key.allowedSessions),
     scope(normalizeChatAllowList(key.allowedChats)),
+    scope(normalizeDeniedCapabilities(key.deniedPermissions)),
     apiKeyExpiryTime(key.expiresAt),
   ]);
 }

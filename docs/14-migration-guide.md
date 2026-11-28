@@ -1287,6 +1287,14 @@ flowchart TD
 > the next upgrade (the compose file forwards it since 0.14.5), but the older image still does not
 > enforce them.
 
+> [!WARNING]
+> A rollback to a release without blocked capabilities drops every API key blocklist. Such a release
+> refuses to start on a `main.sqlite` that records the `deniedPermissions` migration
+> (`MainSchemaMismatchError`), so the way back is restoring `main.sqlite` from before the upgrade, in
+> which no key blocks anything: a key that existed then and was restricted since reaches everything its
+> role and scopes allow again. After such a rollback, revoke every key that had `deniedPermissions`
+> (`POST /api/auth/api-keys/:id/revoke`) and issue new ones after upgrading again.
+
 ## 14.7 Environment Migration
 
 ### Development → Staging

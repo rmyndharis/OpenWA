@@ -83,7 +83,9 @@ test('a key pasted with surrounding whitespace is exchanged at /auth/session tri
   assert.equal(sentKey, 'owa_k1_secret');
   assert.equal(sentCredentials, 'include');
   assert.deepEqual(requests, ['POST /api/auth/session', 'GET /api/auth/session']);
-  assert.deepEqual(logins, [{ role: 'admin', engineType: 'baileys', scoped: false, apiKeyId: 'key-admin-1' }]);
+  assert.deepEqual(logins, [
+    { role: 'admin', engineType: 'baileys', scoped: false, apiKeyId: 'key-admin-1', deniedPermissions: [] },
+  ]);
   assert.equal(sessionStorage.getItem('openwa_api_key'), null);
   assert.equal(localStorage.getItem('openwa_api_key'), null);
 });
