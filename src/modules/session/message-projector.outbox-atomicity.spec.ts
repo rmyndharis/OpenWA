@@ -49,6 +49,7 @@ import { EventsGateway } from '../events/events.gateway';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { LoggerService } from '../../common/services/logger.service';
+import { waitUntil } from '../../../test/helpers/wait-until';
 import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
 const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
@@ -1033,13 +1034,15 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
       });
 
       hand(msg);
-      await waitFor(() => parked());
+      // Waited for as events, however long the database takes on this runner.
+      await waitUntil(() => parked());
+      expect(parked()).toBe(true);
       expect(await storedRow(msg.id)).toMatchObject({ body: 'first text' });
       expect((await storedRow(msg.id))?.status).not.toBe(MessageStatus.READ);
 
       (ds.getRepository(Message).findOne as jest.Mock).mockRestore();
       await projector.retryParkedChanges();
-      await turns(10);
+      await waitUntil(async () => (await storedRow(msg.id))?.status === MessageStatus.READ);
       expect(await storedRow(msg.id)).toMatchObject({ body: 'edited text', status: MessageStatus.READ });
     });
 
@@ -1054,12 +1057,13 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
       });
 
       hand(msg);
-      await waitFor(() => parked());
+      await waitUntil(() => parked());
+      expect(parked()).toBe(true);
       expect(await storedRow(msg.id)).toMatchObject({ type: 'text', body: text });
 
       (ds.getRepository(Message).findOne as jest.Mock).mockRestore();
       await projector.retryParkedChanges();
-      await turns(10);
+      await waitUntil(async () => (await storedRow(msg.id))?.type === 'revoked');
       expect(await storedRow(msg.id)).toMatchObject(cleared);
     });
 
@@ -1079,8 +1083,9 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
       if (failure) failAfterTheCommit(failure);
 
       hand(msg);
-      await waitFor(async () => (await outboxRows())[0]?.state === 'dispatched');
-      await turns(10);
+      // The outbox row closed and the row cleared, as events, however long the database takes on this runner.
+      await waitUntil(async () => (await outboxRows())[0]?.state === 'dispatched');
+      await waitUntil(async () => (await storedRow(msg.id))?.type === 'revoked');
 
       expect(await outboxRows()).toEqual([expect.objectContaining({ state: 'dispatched', payload: null })]);
       expect(
