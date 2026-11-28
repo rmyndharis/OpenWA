@@ -42,8 +42,9 @@
 > another's; a worker that cannot ask Redis for it waits, spending no attempt. With
 > neither, the worker judges the job by the message's stored rows: nothing is sent once any row under the id was
 > taken back, and an edit is sent from a row judged the message's own (lid and phone of one contact only once the
-> pair is reported). Not covered: a change landing during an attempt already under way, and a write Redis has not
-> taken yet (`webhook_job_mark_failed`, tried again every 20 s).
+> pair is reported). Not covered: a change landing during an attempt already under way, a write Redis has not
+> taken yet (`webhook_job_mark_failed`, tried again every 20 s), and an edit of a message whose author's lid and
+> phone are not reported as a pair, whose job then sends the text from before the edit, followed by `message.edited`.
 >
 > Bulk-send batches follow the same rule. A batch is only ever driven by the process
 > holding its session's engine, so a booting replica now reaps only the batches whose
