@@ -547,8 +547,16 @@ export class SessionEngineControls {
         throw closedRefusal();
       }
       // The clear below is the operator's word over a stop kept before it, not one kept while it runs.
+      const live = this.host.rows?.begin(id, 'desiredState');
+      if (live?.wait) await live.wait;
       const stopKept = this.host.rows?.kept(id, 'desiredState');
-      if (!(await this.host.prepareStart(id, desiredState))) {
+      let cleared: boolean;
+      try {
+        cleared = await this.host.prepareStart(id, desiredState);
+      } finally {
+        live?.end();
+      }
+      if (!cleared) {
         await this.requireSession(id);
         this.stoppingSessions.add(id);
         throw new SessionStoppedException(`Session ${id} was stopped`);
@@ -738,9 +746,12 @@ export class SessionEngineControls {
             { id, nodeId },
             { id, nodeId: IsNull() },
           ];
+    const live = this.host.rows?.begin(id, 'status');
+    if (live?.wait) await live.wait;
     const superseded = this.host.rows?.kept(id, 'status');
     try {
       const { affected } = await this.sessionRepository.update(ours, { status: SessionStatus.DISCONNECTED });
+      live?.end();
       if (affected) {
         this.host.rows?.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
         this.broadcaster.announce(id, SessionStatus.DISCONNECTED);
@@ -753,6 +764,8 @@ export class SessionEngineControls {
         sessionId: id,
         error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      live?.end();
     }
   }
 
@@ -935,15 +948,20 @@ export class SessionEngineControls {
             ];
       // A clear the database refuses is kept and written once it answers, and the logout still fails.
       const clearPhone = async (): Promise<unknown> => {
+        const live = this.host.rows?.begin(id, 'phone');
+        if (live?.wait) await live.wait;
         const superseded = this.host.rows?.kept(id, 'phone');
         try {
           const result = await this.sessionRepository.update(phoneWhere, { phone: null });
+          live?.end();
           const landed = (result as { affected?: number } | undefined)?.affected !== 0;
           if (landed) this.host.rows?.landed(id, 'phone', null, superseded);
           return result;
         } catch (error) {
           this.host.rows?.keepSet(id, 'phone', null, error, { owners: this.host.rows?.owners() });
           throw error;
+        } finally {
+          live?.end();
         }
       };
       await (this.host.writePhone?.(id, clearPhone) ?? clearPhone());

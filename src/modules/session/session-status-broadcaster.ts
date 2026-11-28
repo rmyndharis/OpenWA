@@ -79,6 +79,8 @@ export class SessionStatusBroadcaster {
             ]
           : { id, nodeId: resolved.ownerNodeId }
         : id;
+    const live = this.rows?.begin(id, 'status');
+    if (live?.wait) await live.wait;
     const superseded = this.rows?.kept(id, 'status');
     let result: unknown;
     try {
@@ -88,6 +90,8 @@ export class SessionStatusBroadcaster {
       const owners = owner === undefined ? undefined : resolved.allowUnowned ? [owner, null] : [owner];
       this.rows?.keepSet(id, 'status', status, error, { owners });
       throw error;
+    } finally {
+      live?.end();
     }
     const updated = (result as { affected?: number } | undefined)?.affected !== 0;
     if (!updated) {

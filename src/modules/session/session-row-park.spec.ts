@@ -13,10 +13,11 @@ jest.mock('node:timers/promises', () => {
 });
 
 import 'reflect-metadata';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, type DataSourceOptions, Repository } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
 import { SessionEngineLifecycle } from './session-engine-lifecycle.service';
@@ -31,21 +32,27 @@ import { EngineStatus, type EngineEventCallbacks } from '../../engine/interfaces
 import { RecoveryQueue, recoveryQueueOptions } from '../../common/utils/recovery-queue';
 import { RecoveryJournal } from '../../common/utils/recovery-journal';
 import { LoggerService } from '../../common/services/logger.service';
+import { postgresUtcExtra } from '../../database/postgres-utc';
+
+const pg = process.env.DATABASE_TYPE === 'postgres';
 
 /**
  * A write of a session row the database refused (its status, the number a READY links or an unlink clears, an
  * operator's stop) is kept and written once the database answers, only while no later write reached the row, and
  * a restart finds it in the journal and writes it before the boot reset and auto-start read the rows.
  */
-describe('Session row writes the database refused, kept until it answers (SQLite)', () => {
+describe(`Session row writes the database refused, kept until it answers (${pg ? 'PostgreSQL' : 'SQLite'})`, () => {
   let dir: string;
   let ds: DataSource;
+  let schema: string | undefined;
   let sessions: Repository<Session>;
   let id: string;
   // Set while the database refuses the writes of the session rows it matches, with the error it answers.
   let refuse: ((patch: Record<string, unknown>) => Error | undefined) | undefined;
   // Awaited before a write of a session row reaches the database, to run another request at that point.
   let beforeWrite: ((patch: Record<string, unknown>) => Promise<void>) | undefined;
+  // Awaited after a write landed and before its answer comes back, as a database across the network answers late.
+  let afterWrite: ((patch: Record<string, unknown>) => Promise<void>) | undefined;
   let nodes: Array<{ queue: RecoveryQueue; lifecycle: SessionEngineLifecycle }>;
   const unavailable = (): Error => Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR' });
   const rejected = (): Error =>
@@ -53,26 +60,58 @@ describe('Session row writes the database refused, kept until it answers (SQLite
   // eslint-disable-next-line @typescript-eslint/unbound-method -- a jest spy, read for its calls
   const logged = (): jest.Mock => LoggerService.prototype.error as jest.Mock;
 
+  beforeAll(async () => {
+    if (pg) {
+      schema = `session_row_park_${randomUUID().replace(/-/g, '')}`;
+      const options: DataSourceOptions = {
+        type: 'postgres',
+        host: process.env.DATABASE_HOST || 'localhost',
+        port: Number(process.env.DATABASE_PORT || 5432),
+        username: process.env.DATABASE_USERNAME || 'openwa',
+        password: process.env.DATABASE_PASSWORD || 'openwa',
+        database: process.env.DATABASE_NAME || 'openwa',
+        schema,
+        entities: [Session, Message],
+        extra: postgresUtcExtra(),
+      };
+      const setup = await new DataSource(options).initialize();
+      await setup.query(`CREATE SCHEMA "${schema}"`);
+      await setup.destroy();
+      ds = await new DataSource({ ...options, synchronize: true }).initialize();
+    } else {
+      ds = await new DataSource({
+        type: 'better-sqlite3',
+        database: ':memory:',
+        entities: [Session, Message],
+        synchronize: true,
+      }).initialize();
+    }
+  });
+
+  afterAll(async () => {
+    if (schema) await ds.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await ds.destroy();
+  });
+
   beforeEach(async () => {
     jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
     jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
     jest.spyOn(LoggerService.prototype, 'log').mockImplementation(() => undefined);
     refuse = undefined;
     beforeWrite = undefined;
+    afterWrite = undefined;
     mockRetryPause = undefined;
     nodes = [];
     dir = mkdtempSync(join(tmpdir(), 'session-row-park-'));
-    ds = await new DataSource({
-      type: 'better-sqlite3',
-      database: ':memory:',
-      entities: [Session, Message],
-      synchronize: true,
-    }).initialize();
+    await ds.getRepository(Message).clear();
+    await ds.getRepository(Session).clear();
     sessions = ds.getRepository(Session);
     const update = sessions.update.bind(sessions);
     const write = (...[where, patch]: Parameters<typeof update>): ReturnType<typeof update> => {
       const error = refuse?.(patch);
-      return error ? Promise.reject(error) : update(where, patch);
+      if (error) return Promise.reject(error);
+      const held = afterWrite;
+      return held ? update(where, patch).then(async result => (await held(patch), result)) : update(where, patch);
     };
     jest
       .spyOn(sessions, 'update')
@@ -89,13 +128,13 @@ describe('Session row writes the database refused, kept until it answers (SQLite
   afterEach(async () => {
     refuse = undefined;
     beforeWrite = undefined;
+    afterWrite = undefined;
     mockRetryPause = undefined;
     jest.useRealTimers();
     // A reconnect an unlink armed must not fire after the test.
     for (const node of nodes) await node.lifecycle.shutdown();
     for (const node of nodes) await node.queue.drain(0);
     jest.restoreAllMocks();
-    await ds.destroy();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -218,6 +257,13 @@ describe('Session row writes the database refused, kept until it answers (SQLite
   const settle = async (): Promise<void> => {
     for (let turn = 0; turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
   };
+  /** Turns of the event loop, its I/O included, until `ready` holds: PostgreSQL answers over the network. */
+  const until = async (ready: () => boolean | Promise<boolean>): Promise<void> => {
+    for (let turn = 0; turn < 5_000 && !(await ready()); turn++) await new Promise(resolve => setImmediate(resolve));
+    expect(await ready()).toBe(true);
+  };
+  const keptOf = (node: { queue: RecoveryQueue }, field: string) =>
+    node.queue.get('session', `${id}:${field}`) as { write: { with?: { pushName?: string } } } | undefined;
   describe('a status write', () => {
     /** The status is written once, then the database refuses the next one: a reconnect that ran out lands FAILED. */
     async function keptFailed() {
@@ -375,6 +421,7 @@ describe('Session row writes the database refused, kept until it answers (SQLite
       refuse = patch => (patch.status === SessionStatus.DISCONNECTED ? unavailable() : undefined);
 
       const started = node.lifecycle.start(id).catch((error: unknown) => error);
+      await until(() => node.engine.initialize.mock.calls.length > 0);
       await jest.advanceTimersByTimeAsync(resolveEngineInitTimeoutMs());
       expect(await started).toMatchObject({ message: 'disk I/O error' });
       refuse = undefined;
@@ -509,10 +556,28 @@ describe('Session row writes the database refused, kept until it answers (SQLite
       expect((await rowOf()).phone).toBe('628111');
     });
 
+    it('restored after a restart keeps the claim of its session, started again there, when that node stops', async () => {
+      crash(await keptReady('Alice', { nodeId: 'node-a' }));
+      // The next start of node-a cannot land the binding yet. An operator starts the session there, and node-a stops.
+      refuse = patch => ('phone' in patch ? unavailable() : undefined);
+      const next = await restart({ nodeId: 'node-a' });
+      next.ownership?.stopHeartbeat();
+      await next.service.start(id, { explicit: true });
+      await next.service.onModuleDestroy();
+      refuse = undefined;
+      expect((await rowOf()).nodeId).toBe('node-a');
+      crash(next);
+
+      const last = await restart({ nodeId: 'node-a' });
+      last.ownership?.stopHeartbeat();
+
+      expect((await rowOf()).phone).toBe('628111');
+    });
+
     it('keeps the push name the engine synced after it', async () => {
       const node = await keptReady('');
       node.callbacks().onPushNameChanged!('Alice');
-      await settle();
+      await until(() => keptOf(node, 'phone')?.write.with?.pushName === undefined);
 
       await node.queue.flush();
 
@@ -536,8 +601,8 @@ describe('Session row writes the database refused, kept until it answers (SQLite
 
   describe('the phone clear after an unlink', () => {
     /** The session runs bound to 628111; WhatsApp unlinks it, and the database refuses the clear of its number. */
-    async function keptClear() {
-      const node = boot();
+    async function keptClear(options: { nodeId?: string } = {}) {
+      const node = boot(options);
       await node.service.start(id, { explicit: true });
       refuse = patch => ('phone' in patch ? unavailable() : undefined);
       await node.lifecycle.handleEngineDisconnected(id, node.engine as never, 'LOGOUT');
@@ -583,14 +648,47 @@ describe('Session row writes the database refused, kept until it answers (SQLite
       expect((await rowOf()).phone).toBe('628333');
     });
 
-    it('gives way to the same number linked again since', async () => {
+    it('gives way to the same number linked again since, also while its answer is on its way', async () => {
       const node = await keptClear();
+      let answer!: () => void;
+      const answered = new Promise<void>(resolve => (answer = resolve));
+      afterWrite = patch => (patch.phone === '628111' ? answered : Promise.resolve());
       node.callbacks().onReady!('628111', 'Alice');
-      await settle();
+      await until(async () => (await rowOf()).pushName === 'Alice');
 
+      // A pass runs after the number landed and before its answer came back.
+      await node.queue.flush();
+      answer();
+      await settle();
       await node.queue.flush();
 
       expect((await rowOf()).phone).toBe('628111');
+    });
+
+    it('keeps the claim through a stop while a live write of the number is on its way', async () => {
+      const node = await keptClear({ nodeId: 'node-a' });
+      // The engine links again, and its binding is on its way to the database when an operator stops the session.
+      let reach!: () => void;
+      const reached = new Promise<void>(resolve => (reach = resolve));
+      let sent = false;
+      beforeWrite = patch => {
+        if (patch.phone !== '628222') return Promise.resolve();
+        sent = true;
+        return reached;
+      };
+      node.callbacks().onReady!('628222', 'Bob');
+      await until(() => sent);
+      await node.service.stop(id);
+      expect((await rowOf()).nodeId).toBe('node-a');
+      // The binding then meets a database that cannot answer.
+      refuse = patch => ('phone' in patch ? unavailable() : undefined);
+      reach();
+      await until(() => keptOf(node, 'phone')?.write.with?.pushName === 'Bob');
+      refuse = undefined;
+
+      await node.queue.flush();
+
+      expect((await rowOf()).phone).toBe('628222');
     });
 
     it('of a logout is written once the database answers', async () => {
@@ -619,7 +717,8 @@ describe('Session row writes the database refused, kept until it answers (SQLite
       await settle();
       refuse = patch => ('phone' in patch ? unavailable() : undefined);
       await a.lifecycle.handleEngineDisconnected(id, a.engine as never, 'LOGOUT');
-      await settle();
+      // The clear waits behind the number the READY wrote.
+      await until(() => keptOf(a, 'phone') !== undefined);
       refuse = undefined;
       return a;
     }
@@ -675,6 +774,33 @@ describe('Session row writes the database refused, kept until it answers (SQLite
       await a.queue.flush();
 
       expect((await rowOf()).phone).toBe('628111');
+    });
+
+    it('wins over a kept stop record, also once this node keeps a write of that record under a later claim', async () => {
+      const a = boot({ nodeId: 'node-a' });
+      await a.service.start(id, { explicit: true });
+      refuse = patch => ('desiredState' in patch ? unavailable() : undefined);
+      await a.service.forceKill(id);
+      refuse = undefined;
+      await lapse();
+      const b = nodeB();
+      b.factory.create.mockImplementationOnce(() => {
+        throw new Error('EACCES: permission denied');
+      });
+      await expect(b.service.start(id, { explicit: true })).rejects.toThrow('EACCES');
+      // node-a's heartbeat finds the claim gone. A delete of the session there then fails before removing anything,
+      // and the database refuses the clear of the record that delete wrote.
+      await a.ownership!.renew();
+      const fences = (a.lifecycle as unknown as { fences: { awaitPendingTeardown(name: string): Promise<void> } })
+        .fences;
+      jest.spyOn(fences, 'awaitPendingTeardown').mockRejectedValueOnce(new Error('a logout teardown is pending'));
+      refuse = patch => (patch.desiredState === null ? unavailable() : undefined);
+      await expect(a.service.delete(id)).rejects.toThrow('a logout teardown is pending');
+      refuse = undefined;
+
+      await a.queue.flush();
+
+      expect((await rowOf()).desiredState).toBeNull();
     });
   });
 

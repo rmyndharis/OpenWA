@@ -1233,12 +1233,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         if (retryError instanceof ServerShuttingDownException) {
           const claimable = this.ownership?.claimableWhere() ?? [{}];
           const rows = this.engineLifecycle.rows;
+          const live = rows?.begin(id, 'status');
+          if (live?.wait) await live.wait;
           const superseded = rows?.kept(id, 'status');
           try {
             const { affected } = await this.sessionRepository.update(
               claimable.map(clause => ({ ...clause, id, status: SessionStatus.FAILED })),
               { status: SessionStatus.DISCONNECTED },
             );
+            live?.end();
             if (affected) rows?.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
           } catch (error) {
             // Kept for the next boot, which lands it before its reset.
@@ -1251,6 +1254,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
               },
               error,
             );
+          } finally {
+            live?.end();
           }
         }
         throw retryError;
@@ -1583,12 +1588,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    */
   private async disconnectReleasedRow(id: string): Promise<void> {
     const rows = this.engineLifecycle.rows;
+    const live = rows?.begin(id, 'status');
+    if (live?.wait) await live.wait;
     const superseded = rows?.kept(id, 'status');
     try {
       const { affected } = await this.sessionRepository.update(
         { id, nodeId: IsNull(), status: In(ACTIVE_STATUSES) },
         { status: SessionStatus.DISCONNECTED },
       );
+      live?.end();
       if (affected) {
         rows?.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
         this.engineLifecycle.announceStatus(id, SessionStatus.DISCONNECTED);
@@ -1601,6 +1609,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         action: 'session_release_status_failed',
         error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      live?.end();
     }
   }
 

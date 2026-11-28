@@ -146,6 +146,10 @@ export class SessionRows {
   private readonly known = new Map<string, { status?: SessionStatus; phone?: string | null; writes: number }>();
   // The keys of the writes kept per session that have not landed, journaled ones a shutdown pass left included.
   private readonly pending = new Map<string, Set<string>>();
+  // By key, the live writes of a column in flight and the try of its kept write in flight. The two never overlap: a
+  // live write can land well before its answer comes back, and a kept write tried meanwhile would land over it.
+  private readonly writing = new Map<string, number>();
+  private readonly trying = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: SessionRowsDeps) {
     deps.queue?.register('session', {
@@ -163,6 +167,26 @@ export class SessionRows {
   owners(): Array<string | null> | undefined {
     const node = this.deps.ownership?.nodeId;
     return node === undefined ? undefined : [node];
+  }
+
+  /**
+   * A live write of `field` is about to go out: no kept write of the column is tried until `end()`, and the caller
+   * first waits for `wait`, a try already under way. What is kept (kept()) is read after that wait.
+   */
+  begin(sessionId: string, field: SessionRowField): { wait?: Promise<void>; end(): void } {
+    const key = keyOf(sessionId, field);
+    this.writing.set(key, (this.writing.get(key) ?? 0) + 1);
+    let ended = false;
+    return {
+      wait: this.trying.get(key),
+      end: () => {
+        if (ended) return;
+        ended = true;
+        const left = (this.writing.get(key) ?? 1) - 1;
+        if (left > 0) this.writing.set(key, left);
+        else this.writing.delete(key);
+      },
+    };
   }
 
   /** The write of `field` kept now: a live write issued now settles it once it lands. */
@@ -317,11 +341,26 @@ export class SessionRows {
 
   /** One try of a kept write: true once it landed or a later write made it moot, and throws while the database refuses it. */
   async apply(record: KeptRowWrite): Promise<boolean> {
-    const { sessionId, write } = record;
     // The claim it was written under ended: whatever was written since is newer.
     if (record.claim && !record.claim()) return true;
-    // A restore holds the connection: issued now, the write would land on the row it puts back (see restored()).
-    if (sharedConnectionHeld()) return false;
+    // A restore holds the connection: issued now, the write would land on the row it puts back (see restored()). A
+    // live write of the column in flight: it may have landed already.
+    if (sharedConnectionHeld() || this.writing.has(record.key)) return false;
+    const trying = this.land(record);
+    const settled = trying.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.trying.set(record.key, settled);
+    try {
+      return await trying;
+    } finally {
+      if (this.trying.get(record.key) === settled) this.trying.delete(record.key);
+    }
+  }
+
+  private async land(record: KeptRowWrite): Promise<boolean> {
+    const { sessionId, write } = record;
     const owners: FindOptionsWhere<Session>[] = write.owners?.map(nodeId => ({ nodeId: nodeId ?? IsNull() })) ?? [{}];
     const { connectedAt, lastActiveAt, pushName } = write.with ?? {};
     const columns: QueryDeepPartialEntity<Session> = {

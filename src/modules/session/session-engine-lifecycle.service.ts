@@ -1,7 +1,7 @@
 import { Injectable, HttpException, HttpStatus, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource, FindOptionsWhere, IsNull } from 'typeorm';
+import { Repository, DataSource, FindOptionsWhere, IsNull, type UpdateResult } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -1001,6 +1001,8 @@ export class SessionEngineLifecycle {
                   { id, nodeId },
                   { id, nodeId: IsNull() },
                 ];
+          const live = this.rows.begin(id, 'status');
+          if (live.wait) await live.wait;
           const superseded = this.rows.kept(id, 'status');
           let affected: number | undefined;
           try {
@@ -1008,6 +1010,8 @@ export class SessionEngineLifecycle {
           } catch (error) {
             this.rows.keepSet(id, 'status', SessionStatus.DISCONNECTED, error, { owners: this.rows.owners() });
             throw error;
+          } finally {
+            live.end();
           }
           if (affected !== 0) this.rows.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
           // A replacement may reach READY while the database response is still pending.
@@ -1212,34 +1216,46 @@ export class SessionEngineLifecycle {
         sessionId: id,
         error: err instanceof Error ? err.message : String(err),
       });
-    const statusKept = this.rows.kept(id, 'status');
-    const statusWrite = this.sessionRepository.update(where, { status, connectedAt, lastActiveAt }).then(
-      result => {
-        const landed = (result as { affected?: number } | undefined)?.affected !== 0;
-        if (landed) this.rows.landed(id, 'status', status, statusKept);
-        return result;
-      },
-      (error: unknown) => {
-        const times = { connectedAt: at.toISOString(), lastActiveAt: at.toISOString() };
-        this.rows.keepSet(id, 'status', status, error, { owners, with: times });
-        throw error;
-      },
-    );
+    const statusLive = this.rows.begin(id, 'status');
+    const writeStatus = (): Promise<UpdateResult> => {
+      const statusKept = this.rows.kept(id, 'status');
+      return this.sessionRepository.update(where, { status, connectedAt, lastActiveAt }).then(
+        result => {
+          statusLive.end();
+          const landed = (result as { affected?: number } | undefined)?.affected !== 0;
+          if (landed) this.rows.landed(id, 'status', status, statusKept);
+          return result;
+        },
+        (error: unknown) => {
+          const times = { connectedAt: at.toISOString(), lastActiveAt: at.toISOString() };
+          this.rows.keepSet(id, 'status', status, error, { owners, with: times });
+          statusLive.end();
+          throw error;
+        },
+      );
+    };
+    const statusWrite = statusLive.wait ? statusLive.wait.then(writeStatus) : writeStatus();
     if (binding.phone) {
       const linked = binding.phone;
       void this.phoneWrites
         .run(id, () => {
-          const bindingKept = this.rows.kept(id, 'phone');
-          return this.sessionRepository.update(where, binding).then(
-            result => {
-              const landed = (result as { affected?: number } | undefined)?.affected !== 0;
-              if (landed) this.rows.landed(id, 'phone', linked, bindingKept);
-            },
-            (error: unknown) => {
-              this.rows.keepSet(id, 'phone', linked, error, { owners, with: { pushName: binding.pushName } });
-              throw error;
-            },
-          );
+          const live = this.rows.begin(id, 'phone');
+          const issue = (): Promise<void> => {
+            const bindingKept = this.rows.kept(id, 'phone');
+            return this.sessionRepository.update(where, binding).then(
+              result => {
+                live.end();
+                const landed = (result as { affected?: number } | undefined)?.affected !== 0;
+                if (landed) this.rows.landed(id, 'phone', linked, bindingKept);
+              },
+              (error: unknown) => {
+                this.rows.keepSet(id, 'phone', linked, error, { owners, with: { pushName: binding.pushName } });
+                live.end();
+                throw error;
+              },
+            );
+          };
+          return live.wait ? live.wait.then(issue) : issue();
         })
         .catch(persistFailed);
     }
@@ -1592,18 +1608,24 @@ export class SessionEngineLifecycle {
     const where = this.ownedRowWhere(id, ownRowsOnly);
     void this.phoneWrites
       .run(id, () => {
-        const superseded = this.rows.kept(id, 'phone');
-        return this.sessionRepository.update(where, { phone: null }).then(
-          result => {
-            if ((result as { affected?: number } | undefined)?.affected !== 0) {
-              this.rows.landed(id, 'phone', null, superseded);
-            }
-          },
-          (error: unknown) => {
-            this.rows.keepSet(id, 'phone', null, error, { owners: this.rows.owners() });
-            throw error;
-          },
-        );
+        const live = this.rows.begin(id, 'phone');
+        const issue = (): Promise<void> => {
+          const superseded = this.rows.kept(id, 'phone');
+          return this.sessionRepository.update(where, { phone: null }).then(
+            result => {
+              live.end();
+              if ((result as { affected?: number } | undefined)?.affected !== 0) {
+                this.rows.landed(id, 'phone', null, superseded);
+              }
+            },
+            (error: unknown) => {
+              this.rows.keepSet(id, 'phone', null, error, { owners: this.rows.owners() });
+              live.end();
+              throw error;
+            },
+          );
+        };
+        return live.wait ? live.wait.then(issue) : issue();
       })
       .catch((err: unknown) =>
         this.logger.warn('Failed to clear phone after a terminal unlink', {
