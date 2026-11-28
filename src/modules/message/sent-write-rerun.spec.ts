@@ -4,7 +4,7 @@ import { join } from 'path';
 import { ConfigService } from '@nestjs/config';
 import { DataSource, Repository } from 'typeorm';
 import { EngineRegistry } from '../../engine/engine-registry.service';
-import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { HookManager } from '../../core/hooks';
 import { RecoveryJournal } from '../../common/utils/recovery-journal';
 import {
@@ -363,6 +363,40 @@ describe('the SENT write of a send the database refused', () => {
     await queue.flush();
 
     expect(await rows()).toEqual([{ waMessageId: ID, status: 'sent', bytes: true, reactions: undefined }]);
+  });
+
+  // whatsapp-web.js reads the id of a send and of its echo the same way: when one cannot be read, neither can the
+  // other, and the echo is the row that records the message. A bulk item of it is a second row, with no id to merge on.
+  it('stores each own-send echo whose id the engine could not read once the database answers', async () => {
+    const { queue, projector } = start();
+    const insert = jest.spyOn(messages, 'insert');
+    insert.mockImplementationOnce(() => Promise.reject(unavailable()));
+    insert.mockImplementationOnce(() => Promise.reject(unavailable()));
+    const engine = engines.get('s1')!;
+    const sent = (body: string): IncomingMessage =>
+      ({
+        id: '',
+        from: '628999@c.us',
+        to: PHONE,
+        chatId: PHONE,
+        body,
+        type: 'text',
+        timestamp: 1_786_000_000,
+        fromMe: true,
+        isGroup: false,
+      }) as IncomingMessage;
+
+    projector.handleOwnSendEcho('s1', engine, sent('first'));
+    projector.handleOwnSendEcho('s1', engine, sent('second'));
+    for (let turn = 0; turn < 60; turn++) await new Promise(resolve => setImmediate(resolve));
+    expect(insert).toHaveBeenCalledTimes(2);
+    await queue.flush();
+
+    const stored = await messages.find({ where: { sessionId: 's1' } });
+    expect(stored.map(row => [row.body, row.waMessageId ?? null]).sort()).toEqual([
+      ['first', null],
+      ['second', null],
+    ]);
   });
 
   it('keeps the SENT write of a template send, which goes out as a text', async () => {
